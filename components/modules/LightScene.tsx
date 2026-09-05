@@ -125,6 +125,26 @@ const PRISM_FAN_WAVELENGTHS_NM = [420, 450, 480, 510, 540, 570, 600, 650]
 // point.
 const LENS_BUNDLE_HEIGHTS_M = [-1.4, -0.9, -0.45, 0, 0.45, 0.9, 1.4]
 
+// Real-lens-aperture fix (screenshot-flagged bug): LensShape's own silhouette (below) is drawn
+// at half-height H/2 = 0.8m — anything sampled/selected outside that never actually passes
+// through the glass, no matter what step()'s paraxial (infinite-aperture) math says. Kept here
+// as the single source of truth so the bundle/highlight clipping below and LensShape's H both
+// derive from the same number (LensShape defines H = 1.6 directly since it's a local geometry
+// constant, not exported — if that ever changes, this must change with it).
+const LENS_APERTURE_HALF_HEIGHT_M = 0.8
+
+// A ray height beyond the lens's own rendered aperture never touches the glass — physically it
+// must pass straight through undeviated, not bend as if step()'s infinite-aperture paraxial
+// formula applied. Only the "refracted-ray" leg is bent by step(); overriding just its velocity
+// back to the original incident direction (+X) turns it into a straight continuation instead of
+// a fake convergence/divergence for a ray that never hit the lens.
+function clipRayToAperture(objects: SceneObject[], rayHeightM: number): SceneObject[] {
+  if (Math.abs(rayHeightM) <= LENS_APERTURE_HALF_HEIGHT_M) return objects
+  return objects.map((o) =>
+    o.id === "refracted-ray" ? { ...o, velocity: [1, 0, 0] as Vec3 } : o
+  )
+}
+
 /** Calls the pure `step()` once per wavelength sample (same angle/apex/index params, only
  * wavelength_nm varies) and pulls out just the post-first-face rays (where real dispersion is
  * visible) from each, uniquely re-keyed so React doesn't collide ids across samples. */
@@ -145,9 +165,8 @@ function buildLensBundle(params: ScenarioParams, t: number): SceneObject[] {
   const bundled: SceneObject[] = []
   LENS_BUNDLE_HEIGHTS_M.forEach((ray_height_m, i) => {
     const sample = lightStep({ ...params, ray_height_m }, t)
-    sample.objects
-      .filter((o) => o.id === "incident-ray" || o.id === "refracted-ray")
-      .forEach((o) => bundled.push({ ...o, id: `${o.id}-bundle-${i}` }))
+    const legs = sample.objects.filter((o) => o.id === "incident-ray" || o.id === "refracted-ray")
+    clipRayToAperture(legs, ray_height_m).forEach((o) => bundled.push({ ...o, id: `${o.id}-bundle-${i}` }))
   })
   return bundled
 }
@@ -238,8 +257,19 @@ export function LightScene({
   const highlightObjects = isPrism
     ? state.objects.filter((o) => o.id === "refracted-ray" || o.id === "refracted-ray-2")
     : isLens
-      ? state.objects.filter((o) => o.id === "incident-ray" || o.id === "refracted-ray")
+      ? clipRayToAperture(
+          state.objects.filter((o) => o.id === "incident-ray" || o.id === "refracted-ray"),
+          THREE.MathUtils.clamp(paramsRef.current.ray_height_m ?? 0.5, -1.5, 1.5)
+        )
       : []
+
+  // light-multiray-01 correction: the prism's wavelength-sweep rainbow fan is only physically
+  // correct as a stand-in for WHITE light (many wavelengths mixed) being dispersed — with a
+  // single wavelength selected (the default), a prism produces exactly one colored ray, so the
+  // fan is gated behind the explicit white_light toggle. The lens bundle sweeps ray_height_m at
+  // one fixed wavelength_nm — it's a "parallel rays converge to one focal point" demo, not a
+  // color-mixing one, so it is NOT gated by white_light and stays on regardless.
+  const whiteLightOn = (paramsRef.current.white_light ?? 0) >= 0.5
 
   // The actual "aha" effect: N extra calls to the same pure step() with only wavelength_nm (prism)
   // or ray_height_m (lens) swept across a spread, so the real dispersion/convergence math already
@@ -248,11 +278,11 @@ export function LightScene({
   // behind an actual param change), so this stays cheap — no per-frame cost beyond what a single
   // ray already had.
   const bundleObjects = useMemo(() => {
-    if (isPrism) return buildPrismFan(paramsRef.current, state.t)
+    if (isPrism && whiteLightOn) return buildPrismFan(paramsRef.current, state.t)
     if (isLens) return buildLensBundle(paramsRef.current, state.t)
     return []
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isPrism, isLens, state])
+  }, [isPrism, isLens, whiteLightOn, state])
 
   // For prism/lens, the two flat "interface"/"interface-2" plane markers are slab-only visual
   // stand-ins; swap them out for the wedge/lens set piece instead of drawing both (avoids a
@@ -261,9 +291,13 @@ export function LightScene({
   // once as the thicker highlight) so nothing double-draws. Every other SceneObject (the
   // untouched incident/reflected ray for prism, the focal-point sphere for lens) still renders
   // generically via ObjectRenderer, unchanged.
+  // Matched by id, not reference: clipRayToAperture (lens aperture fix, above) can return clones
+  // of highlightObjects' entries rather than the original state.objects references, so a
+  // reference-based .includes() would miss those and double-draw the un-clipped original.
+  const highlightIds = new Set(highlightObjects.map((o) => o.id))
   const renderedObjects = (isPrism || isLens
     ? state.objects.filter(
-        (o) => o.id !== "interface" && o.id !== "interface-2" && !highlightObjects.includes(o)
+        (o) => o.id !== "interface" && o.id !== "interface-2" && !highlightIds.has(o.id)
       )
     : state.objects
   ).filter((o) => isFiniteVec3(o.position) && isFiniteVec3(o.velocity))

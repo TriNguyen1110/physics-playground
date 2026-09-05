@@ -65,6 +65,14 @@ export const MODULE_META: Record<
       { key: "R1_m", label: "Lens R1", min: -2, max: 2, step: 0.05, default: 0.5, unit: " m" },
       { key: "R2_m", label: "Lens R2", min: -2, max: 2, step: 0.05, default: -0.5, unit: " m" },
       { key: "ray_height_m", label: "Ray height (lens)", min: -1.5, max: 1.5, step: 0.05, default: 0.5, unit: " m" },
+      // light-multiray-01 correction: the prism's rainbow-fan (8 sampled wavelengths) is only
+      // physically correct as a stand-in for WHITE light being dispersed — a single selected
+      // wavelength through a prism produces exactly one colored ray, not a rainbow. Default OFF
+      // so the base case is the physically correct monochromatic ray at the slider's own
+      // wavelength_nm; flipping this on is an explicit "simulate white light" opt-in. Does not
+      // affect the lens's ray-height convergence bundle (see LightScene.tsx), which sweeps
+      // ray_height_m at one fixed wavelength and is unrelated to color mixing.
+      { key: "white_light", label: "White light (rainbow)", min: 0, max: 1, step: 1, default: 0, kind: "toggle" },
     ],
   },
   projectiles: {
