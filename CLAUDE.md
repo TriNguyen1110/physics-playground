@@ -30,17 +30,25 @@ Every module is judged on three things, in this order. A module that's 2/3 is no
    state re-render lag), ranges have to be wide enough to produce visibly different, sometimes
    surprising outcomes, and there should be an obvious "aha" — the exact moment a projectile
    clears the wall, a light ray hits total internal reflection, two charges snap together.
-3. **Beautiful.** Think hands-on science museum exhibit (Exploratorium, not a textbook diagram):
-   real lighting (drei `Environment`/soft shadows), a coherent color palette per module, motion
-   that eases instead of teleporting, and a clean "museum placard" readout panel — not raw JSON
-   numbers dumped on screen. Beauty is `scene`'s job and it is real scope, not polish to skip if
-   short on time — but it never trades off against #1 or #2. A gorgeous scene with wrong physics
-   fails; correct-but-ugly ships before beautiful-but-wrong does.
+3. **Beautiful.** Think hands-on science museum exhibit (Exploratorium, not a textbook diagram),
+   with a specific reference: **Beaker by Thix** (thix.co/beaker) — a near-black/dark
+   laboratory void with one glowing, colorful, alive-feeling object as the entire focal point.
+   Cold, not warm: near-black or deep-slate background (not white, not a skybox photo), the
+   *simulation itself* (light rays, field vectors, the projectile and its trail) rendered as
+   glowing/emissive against that dark void — like a chemical reaction glowing inside a dark
+   beaker — rather than colorful surfaces lit by a bright environment. Motion eases instead of
+   teleporting. Readouts are a small frosted-glass/translucent "museum placard" overlay with
+   units, not raw JSON dumped on screen. Beauty is `scene`'s job and it is real scope, not
+   polish to skip if short on time — but it never trades off against #1 or #2. A gorgeous scene
+   with wrong physics fails; correct-but-ugly ships before beautiful-but-wrong does.
 
-Concretely for `scene`: soft/physically-based lighting on every module (not flat ambient-only),
-a distinct color identity per module (e.g. warm amber for light/optics, cool blue for fields,
-neutral for projectiles), smooth camera framing (no jump cuts switching modules), and readouts
-styled as a small overlay card with units, not a `<pre>` dump.
+Concretely for `scene`: dark/near-black base scene across ALL modules (consistent cold identity,
+not a different background per module), with each module's signature color living in what
+*glows* — e.g. cool cyan-white for light/optics rays, electric blue/violet for field vectors,
+a hot streak trail for the projectile against the same dark void. Soft rim/point lighting on
+glowing elements (drei `Environment` set to something like `"night"`/`"warehouse"` at low
+intensity, not a bright daytime preset), smooth eased camera framing between modules (no jump
+cuts), and a frosted/glass readout panel, never a `<pre>` dump.
 
 ## The actual clock
 

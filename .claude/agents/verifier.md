@@ -57,9 +57,11 @@ Invoked with exactly one scope, `DATA` or `SCREEN`. If not told a scope, stop an
    is a blocking failure, same severity as a console error. Confirm the range actually produces
    a distinct "aha" outcome somewhere in it (per CLAUDE.md's North star), not just a subtle
    numeric change with no visible payoff.
-5. **Basic visual bar.** Each module needs more than flat/no lighting (check for shadows or a
-   lit environment actually present in the scene graph) and a module-specific color identity —
-   three modules that are visually identical except for the objects is a fail, report it as one.
+5. **Basic visual bar (Beaker-by-Thix reference: dark void, one glowing thing).** Confirm the
+   scene background is dark/near-black and consistent across all three modules — a bright/white
+   or per-module-different background is a fail. Confirm the simulation elements themselves
+   (rays/vectors/projectile) use emissive/glowing materials distinguishable module-to-module by
+   color, not by background — flat unlit surfaces on a bright environment is a fail too.
 6. `npm run test:scene` (once it exists), clean.
 
 ## Reporting

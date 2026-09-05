@@ -35,10 +35,14 @@ Rules:
 - Read CLAUDE.md's "North star" section before starting. Correctness (engine's job) and
   interactivity come first, beauty is real scope but never trades off against them — a gorgeous
   scene with laggy sliders or a wrong trajectory is not done.
-- Every module needs: soft/physically-based lighting (drei `Environment` or a proper
-  key/fill/rim setup, not flat ambient-only), a distinct color identity, eased camera transitions
-  between modules (no jump cuts), and a readout styled as a small overlay card with units — never
-  a raw `<pre>`/JSON dump. This is a museum-exhibit exhibit piece, not a debug view.
+- Visual reference: **Beaker by Thix** (thix.co/beaker) — dark laboratory void, one glowing
+  colorful thing as the focal point. Keep the base scene near-black/deep-slate across ALL
+  THREE modules (don't give each module a different background), and put each module's color
+  identity into what glows instead: emissive materials on light rays, field vectors, and the
+  projectile/trail, with soft rim/point lighting picking them out of the dark rather than a
+  bright environment lighting flat-colored surfaces. Eased camera transitions between modules
+  (no jump cuts), and a frosted/glass readout overlay card with units — never a raw
+  `<pre>`/JSON dump. Cold, not warm.
 - Slider response must feel instant. Drive `step()` from `useFrame` every animation frame, never
   gated behind a React state re-render. If dragging a slider visibly lags the canvas, that's a
   blocking bug, not a nice-to-have fix.
