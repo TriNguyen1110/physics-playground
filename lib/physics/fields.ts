@@ -13,6 +13,9 @@
 //   b_field       — magnitude of a uniform external magnetic field along +Y, tesla-equivalent.
 //                   [0, 5]
 //   test_charge   — signed charge of the test particle sitting at the origin. [-5, 5]
+//   test_mass_kg  — mass of the test particle, kg. Default 1. [0.1, 20]. Feeds a direct F=ma
+//                   readout: acceleration = lorentzForce / test_mass_kg. No new law, just the
+//                   already-computed Lorentz force divided by mass.
 //
 // Coulomb's law (F = k*q1*q2/r^2) and the Lorentz force magnitude (F = q(E + v x B)) are the
 // two hand-written physical laws. Everything downstream — combining per-source field vectors,
@@ -33,6 +36,7 @@ export function step(params: ScenarioParams, t: number): ScenarioState {
   const testVelocity = params.test_velocity ?? 0
   const bFieldMag = params.b_field ?? 0
   const testCharge = params.test_charge ?? 1
+  const testMass = Math.max(params.test_mass_kg ?? 1, 1e-6)
 
   const pos1 = new THREE.Vector3(-separation / 2, 0, 0)
   const pos2 = new THREE.Vector3(separation / 2, 0, 0)
@@ -70,6 +74,10 @@ export function step(params: ScenarioParams, t: number): ScenarioState {
   const vCrossB = velocity.clone().cross(bField)
   const lorentzForce = eTotal.clone().add(vCrossB).multiplyScalar(testCharge)
 
+  // F = m*a -> a = F/m. Direct application of Newton's second law to the already-computed
+  // Lorentz force; no new physical law, just a division.
+  const acceleration = lorentzForce.clone().divideScalar(testMass)
+
   const objects: SceneObject[] = [
     {
       id: "charge-1",
@@ -97,7 +105,9 @@ export function step(params: ScenarioParams, t: number): ScenarioState {
       meta: {
         role: "test-particle",
         charge: testCharge,
+        mass_kg: testMass,
         lorentz_force: [lorentzForce.x, lorentzForce.y, lorentzForce.z],
+        acceleration: [acceleration.x, acceleration.y, acceleration.z],
       },
     },
   ]
@@ -115,6 +125,8 @@ export function step(params: ScenarioParams, t: number): ScenarioState {
     { label: "Coulomb force (1 on 2)", value: `${coulombForceMag.toFixed(3)} N` },
     { label: "net E-field at test particle", value: `${eTotal.length().toFixed(3)} N/C` },
     { label: "Lorentz force on test particle", value: `${lorentzForce.length().toFixed(3)} N` },
+    { label: "test particle mass", value: `${testMass.toFixed(2)} kg` },
+    { label: "acceleration (F/m)", value: `${acceleration.length().toFixed(3)} m/s^2` },
   ]
 
   return { t, objects, fieldVectors, readouts }
