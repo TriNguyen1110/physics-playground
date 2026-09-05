@@ -26,10 +26,16 @@ Rules:
   the resulting vector" should go through `three`'s math, not custom code.
 - A slider that doesn't change the actual output numbers is not a shipped feature, even if the
   code compiles.
-- API clients in `lib/api/*.ts` default to mocked responses (see CONTRACT.md). Never make a
-  real network call without `mock: false` explicitly passed and the matching env var present —
-  real keys don't exist until hackathon check-in, and an accidental real call before then will
-  just 401.
+- **Check `.env.local` for real keys before doing anything else with `lib/api/*.ts`.** This is
+  a sponsored hackathon and real sponsor tool usage is a judged requirement, not optional — see
+  CONTRACT.md/CLAUDE.md. If a key (`TRIPO_API_KEY`, `WORLDLABS_API_KEY`, `MINTGG_API_KEY`) is
+  present, your job is to call that API for real (`mock: false`) and confirm you get back a
+  real, usable result (asset URL, world preview, publish link) — not to leave the client
+  mocked "for safety." Mocked-by-default exists only for whichever key is genuinely still
+  missing, and even then, say so loudly (a `blocked` row) rather than quietly shipping mock-only
+  and calling the integration done. If a real call 400s/403s (e.g. bad params, out of credits),
+  that's real information — report it exactly (status code + message) in a `fact`/`blocked` row,
+  don't silently fall back to mock and hide that the integration was attempted.
 - Convex: one schema, no auth. `setParams`/`getSession`/`createSession` are the only functions
   needed for the demo's shared-session hook. Do not add more surface than the contract lists.
 - Assert non-empty/non-NaN output. If `step()` ever returns `NaN` positions or an empty

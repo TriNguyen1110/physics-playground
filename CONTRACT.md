@@ -98,10 +98,12 @@ export async function generateAsset(prompt: string, opts?: { mock?: boolean }): 
 export async function publishScene(sceneId: string, opts?: { mock?: boolean }): Promise<{ shareUrl: string }>
 ```
 
-These are optional enhancements (env backdrop from World Labs, hero props from Tripo, one-click
-publish via mint.gg). The core simulator (`step()` + R3F scene + Rapier) works with zero
-sponsor API calls — that's the fallback if any of the three integrations don't come together in
-time.
+**This is a sponsored hackathon — real sponsor tool usage is a judged requirement, not
+optional polish.** The core simulator working without them is a *resilience* property (no
+single flaky API call can sink the demo), not a reason to skip them. Target: at least Tripo
+(hero 3D assets) and mint.gg (publish) actually wired in and called for real before the 6pm
+freeze; World Labs (backdrop) too if time allows. Only fall back to mocked/local if a specific
+integration is genuinely blocked (no key, API down) after a real attempt — not by default.
 
 ## Fallback table
 

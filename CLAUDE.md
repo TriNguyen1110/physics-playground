@@ -59,10 +59,13 @@ Hacking runs **10:00 AM–1:00 PM, 1:45–6:00 PM**, submissions due **6:00 PM s
   If a module isn't there by lunch, it's the first thing cut, not projectiles/fields/light
   picked arbitrarily — cut whichever module's physics is least solid.
 - By ~4:00 PM: all three modules interactive and rendered (SCREEN scope clear) — this is the
-  minimum demoable product. Sponsor API integrations (World Labs backdrop, Tripo assets, mint.gg
-  publish) only start after this bar is met, never before it.
-- 4:00–5:30 PM: beauty pass (lighting, palette, readout styling) and sponsor integrations, in
-  that order, per CONTRACT.md's cut order if time is short.
+  minimum demoable product, and the resilience baseline. Sponsor API integrations start
+  immediately once this bar is met, and are a real deliverable for this hackathon, not
+  optional polish — this is a sponsored event and using the sponsor tools is part of judging.
+- 4:00–5:30 PM: wire in real sponsor integrations (Tripo assets, mint.gg publish, World Labs
+  backdrop if time allows) and do the beauty pass. If a specific integration is genuinely
+  blocked (no key, API down after a real attempt), fall back per CONTRACT.md's cut order — but
+  that's a last resort per-integration, not the default plan.
 - 5:30–6:00 PM: freeze. No new commits after 5:30 except a fix for something that broke the demo
   path. Rehearse the 2-minute walkthrough at least once before 6:00.
 
