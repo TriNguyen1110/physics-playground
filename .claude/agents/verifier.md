@@ -45,7 +45,15 @@ Invoked with exactly one scope, `DATA` or `SCREEN`. If not told a scope, stop an
 5. Any sponsor API client (`lib/api/*.ts`) called with real keys (post-check-in only): confirm
    the response actually has a usable URL, not just a 200.
 
-**SCREEN scope** — `scene`'s output, safe to run while `engine` is working.
+**SCREEN scope** — `scene`'s output, safe to run while `engine` is working. Use the `playwright`
+MCP tools directly (already configured in this project) rather than npx-installing your own.
+Prefer reading `[data-testid="debug-state"]`'s text content for exact numeric checks (object
+positions/velocities) over inferring state from screenshot pixel-diffs — pixels are for
+confirming something is visually *present and glowing correctly*, not for confirming *where*
+it is. If a collision/physics-vs-visual mismatch is suspected, load the app with `?debug=1` (or
+whatever toggle `scene` wired for Rapier's `<Physics debug>` collider wireframes) and check
+visually whether the mesh and its collider actually line up, before spending time on pixel-diff
+screenshots to prove the same thing indirectly.
 
 1. Playwright: load the app, switch to each of the three modules, drag a slider, confirm the
    canvas visibly updates and no console error/uncaught exception/failed request appears.

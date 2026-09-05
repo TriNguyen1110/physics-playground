@@ -51,7 +51,22 @@ Rules:
   charges' field lines snapping together) — a slider that only ever produces subtly-different
   boring outcomes across its whole range isn't fun, narrow the boring part or widen the range.
 
-Verify visually before claiming done. The dev server runs on a fixed port and is started by the
+Add a debugging aid every module can rely on: a hidden `data-testid="debug-state"` element
+(visually hidden, e.g. `sr-only`/`opacity-0`, not `display:none` which some tools skip) that
+dumps the current frame's live object positions/velocities/readouts as plain text/JSON. This
+turns "did the ball move" into a real numeric check the verifier can read via the DOM instead of
+inferring it from screenshot pixel-diffs, which is slow and imprecise for 3D scenes. Update it
+every `useFrame` alongside the visible readout card.
+
+Wire `@react-three/rapier`'s `<Physics debug>` prop behind a toggle (e.g. a `?debug=1` query
+param or a small on-screen checkbox) rather than always-on — it draws collider wireframes
+directly in the scene, which is the fastest way to catch a mismatch between the visible mesh and
+its actual collider (exactly the class of bug that caused the projectile ball to fall through
+the ground invisibly). Use it yourself while building the `projectiles` module, don't wait for
+the verifier to have to pixel-diff six screenshots to prove a collision bug exists.
+
+Verify visually before claiming done, using the `playwright` MCP tools directly (already
+configured in this project) rather than npx-installing your own Playwright. The dev server runs on a fixed port and is started by the
 main session — never launch your own; a second process on the same port produces stale/mismatched
 build errors that look like real bugs but aren't. Use the playwright tools to open the page,
 switch between all three modules, drag a slider, and confirm the canvas actually updates and the
