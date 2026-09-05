@@ -201,6 +201,66 @@ const WAVE_POINTS_PER_SEGMENT = 28
 // propagating along the ray direction from frame to frame.
 const WAVE_PROPAGATION_SPEED = 6
 
+// Bug fix (light-wave-animation-01 correction, user-reported "the wave is not strictly sin cos
+// at all"): confirmed via a standalone Node repro (replicating this file's exact formula) that a
+// SINGLE ray segment's 28-point array IS a mathematically clean sinusoid (uniform spacing, exact
+// A*sin(2*pi*distanceAlongRay/visualWavelength - phase) at every point, perpendicular truly
+// perpendicular, no NaN). The actual bug is at the SEAM between chained segments
+// (incident-ray -> reflected-ray / refracted-ray -> refracted-ray-2): each WaveRay instance
+// computed `distAlong` from its OWN local origin (0 -> its own length), so the sine argument
+// reset to a phase of `-phase` at every segment's start instead of continuing from where the
+// previous segment's phase left off. For a typical non-wavelength-multiple ray length this is a
+// full, visible jump in the offset value (up to 2x amplitude) exactly at the point where two
+// segments visually meet — reads as a kink/break, not "one ray's clean wave", even though each
+// segment alone was clean. Fix: track how much distance the wave has already "traveled" before
+// each segment starts (`phaseOffsetM`) using the known, fixed chain topology of this module's ray
+// ids, and add it into the sine argument only (not into the geometry's along-ray offset) so
+// adjacent segments share one continuous running phase.
+const RAY_CHAIN_ROLE_ORDER = ["incident-ray", "reflected-ray", "refracted-ray", "refracted-ray-2"] as const
+type RayChainRole = (typeof RAY_CHAIN_ROLE_ORDER)[number]
+
+/** Strips the `-fan-N` / `-bundle-N` re-keying suffix (added by buildPrismFan/buildLensBundle so
+ * React ids stay unique across samples) back down to the underlying chain role, so segments that
+ * belong to the same sampled ray can be matched up regardless of which pass rendered them. */
+function chainRoleOf(id: string): RayChainRole | null {
+  const base = id.replace(/-(fan|bundle)-\d+$/, "")
+  return (RAY_CHAIN_ROLE_ORDER as readonly string[]).includes(base) ? (base as RayChainRole) : null
+}
+
+/** Given every SceneObject about to be rendered as a WaveRay this frame (across the main pass,
+ * the rainbow fan, and the lens bundle), returns a map of object id -> cumulative distance the
+ * wave has already traveled before that segment's own local origin, so its sine argument can
+ * continue the previous segment's phase instead of resetting to 0. Segments are grouped by their
+ * `-fan-N`/`-bundle-N` suffix (each sampled ray is its own independent chain); the fan doesn't
+ * re-include `incident-ray` per sample (only the post-first-face legs), so those groups fall back
+ * to the single shared `incident-ray`'s own length as the base offset. */
+function buildPhaseOffsets(objects: SceneObject[]): Map<string, number> {
+  const suffixOf = (id: string) => id.match(/-(?:fan|bundle)-\d+$/)?.[0] ?? ""
+  const groups = new Map<string, Map<RayChainRole, SceneObject>>()
+  for (const o of objects) {
+    const role = chainRoleOf(o.id)
+    if (!role) continue
+    const key = suffixOf(o.id)
+    if (!groups.has(key)) groups.set(key, new Map())
+    groups.get(key)!.set(role, o)
+  }
+  const sharedIncidentLength = (groups.get("")?.get("incident-ray")?.meta?.length as number) ?? 0
+
+  const offsets = new Map<string, number>()
+  for (const [, byRole] of groups) {
+    const lengthOf = (role: RayChainRole) => (byRole.get(role)?.meta?.length as number) ?? 0
+    const incidentLen = byRole.has("incident-ray") ? lengthOf("incident-ray") : sharedIncidentLength
+    const cumulative: Record<RayChainRole, number> = {
+      "incident-ray": 0,
+      "reflected-ray": incidentLen,
+      "refracted-ray": incidentLen,
+      "refracted-ray-2": incidentLen + lengthOf("refracted-ray"),
+    }
+    for (const [role, obj] of byRole) offsets.set(obj.id, cumulative[role])
+  }
+  return offsets
+}
+
 /** Renders one ray SceneObject as an animated sinusoidal wave instead of a straight line: builds
  * a dense point array offset perpendicular to the ray's own direction by
  * amplitude*sin(2*pi*distanceAlongRay/visualWavelength - phase), phase incremented every frame
@@ -212,10 +272,12 @@ function WaveRay({
   object,
   lineWidth = 2.5,
   opacity = 0.95,
+  phaseOffsetM = 0,
 }: {
   object: SceneObject
   lineWidth?: number
   opacity?: number
+  phaseOffsetM?: number
 }) {
   const dir = object.velocity ?? [0, -1, 0]
   const length = (object.meta?.length as number) ?? 4
@@ -263,7 +325,12 @@ function WaveRay({
     for (let i = 0; i < WAVE_POINTS_PER_SEGMENT; i++) {
       const t = i / (WAVE_POINTS_PER_SEGMENT - 1)
       const distAlong = t * length
-      const offset = WAVE_AMPLITUDE_M * Math.sin((2 * Math.PI * distAlong) / visualWavelength - phase)
+      // Sine argument uses the CUMULATIVE distance (this segment's own distAlong plus however far
+      // prior chained segments already carried the wave) so phase is continuous across the seam
+      // where one ray segment ends and the next begins; the geometry offset itself still applies
+      // along this segment's own local dirNorm/perp, only the wave's phase input changes.
+      const offset =
+        WAVE_AMPLITUDE_M * Math.sin((2 * Math.PI * (distAlong + phaseOffsetM)) / visualWavelength - phase)
       scratch.copy(origin).addScaledVector(dirNorm, distAlong).addScaledVector(perp, offset)
       flat[i * 3] = scratch.x
       flat[i * 3 + 1] = scratch.y
@@ -288,8 +355,8 @@ function WaveRay({
 
 /** Same wave rendering as WaveRay, but with a thicker/brighter line — used to pick the current
  * slider-selected ray out of the prism/lens bundle rather than losing it in the fan. */
-function HighlightRay({ object }: { object: SceneObject }) {
-  return <WaveRay object={object} lineWidth={5} opacity={1} />
+function HighlightRay({ object, phaseOffsetM = 0 }: { object: SceneObject; phaseOffsetM?: number }) {
+  return <WaveRay object={object} lineWidth={5} opacity={1} phaseOffsetM={phaseOffsetM} />
 }
 
 export function LightScene({
@@ -427,16 +494,29 @@ export function LightScene({
 
   const apexAngleDeg = (interfaceObj?.meta?.apex_angle_deg as number | undefined) ?? 60
 
+  // Phase-continuity fix (see buildPhaseOffsets above): computed once over every ray object about
+  // to be drawn as a WaveRay this frame — the main pass, the fan, and the highlight all share ids
+  // that resolve to the same fixed chain topology, so one shared map covers all three loops below.
+  const phaseOffsets = buildPhaseOffsets([...renderedObjects, ...finiteBundleObjects, ...finiteHighlightObjects])
+
   return (
     <group>
       {renderedObjects.map((o) =>
-        o.kind === "ray" ? <WaveRay key={o.id} object={o} /> : <ObjectRenderer key={o.id} object={o} />
+        o.kind === "ray" ? (
+          <WaveRay key={o.id} object={o} phaseOffsetM={phaseOffsets.get(o.id) ?? 0} />
+        ) : (
+          <ObjectRenderer key={o.id} object={o} />
+        )
       )}
       {finiteBundleObjects.map((o) =>
-        o.kind === "ray" ? <WaveRay key={o.id} object={o} /> : <ObjectRenderer key={o.id} object={o} />
+        o.kind === "ray" ? (
+          <WaveRay key={o.id} object={o} phaseOffsetM={phaseOffsets.get(o.id) ?? 0} />
+        ) : (
+          <ObjectRenderer key={o.id} object={o} />
+        )
       )}
       {finiteHighlightObjects.map((o) => (
-        <HighlightRay key={`highlight-${o.id}`} object={o} />
+        <HighlightRay key={`highlight-${o.id}`} object={o} phaseOffsetM={phaseOffsets.get(o.id) ?? 0} />
       ))}
       {isPrism && <PrismWedge apexAngleDeg={apexAngleDeg} />}
       {isLens && <LensShape converging={role === "convex-lens"} />}
