@@ -54,10 +54,10 @@ export const MODULE_META: Record<
       { key: "charge2", label: "Charge 2", min: -5, max: 5, step: 0.1, default: -3, unit: "q" },
       { key: "separation", label: "Separation", min: 0.5, max: 10, step: 0.1, default: 4, unit: "m" },
       { key: "test_charge", label: "Test particle charge", min: -5, max: 5, step: 0.1, default: 1, unit: "q" },
-      { key: "test_velocity", label: "Test particle v (+Z)", min: 0, max: 20, step: 0.5, default: 0, unit: "m/s" },
-      // Nonzero default so dragging test_velocity alone (holding b_field at its own default)
-      // already produces a visible Lorentz force change out of the box — v x B is exactly 0
-      // whenever either factor is 0, so both can't default to 0 (verifier scene-01 SCREEN fail).
+      // Both test_velocity and b_field default nonzero so v x B is nonzero at the default
+      // state no matter which slider moves alone — either one defaulting to 0 makes the
+      // other slider inert across its whole range (verifier scene-01 SCREEN fail, twice).
+      { key: "test_velocity", label: "Test particle v (+Z)", min: 0, max: 20, step: 0.5, default: 5, unit: "m/s" },
       { key: "b_field", label: "Magnetic field (+Y)", min: 0, max: 5, step: 0.1, default: 1.5, unit: "T" },
     ],
   },
