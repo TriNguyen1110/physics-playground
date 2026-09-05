@@ -32,7 +32,11 @@ export function Scene({
   return (
     <>
       <color attach="background" args={[VOID_COLOR]} />
-      <fog attach="fog" args={[VOID_COLOR, 8, 30]} />
+      {/* far bumped 30->70: the projectiles camera preset sits further back
+          (to keep the ball's full default-parameter arc in frame — see
+          CameraRig.tsx) than light/fields' cameras, which are all within
+          ~10 units of their content and unaffected by raising this. */}
+      <fog attach="fog" args={[VOID_COLOR, 8, 70]} />
 
       <CameraRig module={module} />
 

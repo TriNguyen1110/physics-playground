@@ -1,8 +1,8 @@
 "use client"
 
-import { useRef, useState, type MutableRefObject } from "react"
+import { memo, useRef, useState, type MutableRefObject } from "react"
 import { useFrame } from "@react-three/fiber"
-import { Physics, RigidBody, type RapierRigidBody } from "@react-three/rapier"
+import { BallCollider, CuboidCollider, Physics, RigidBody, type RapierRigidBody } from "@react-three/rapier"
 import { ObjectRenderer } from "@/components/ObjectRenderer"
 import { step as projectilesStep } from "@/lib/physics/projectiles"
 import type { ScenarioParams, ScenarioState } from "@/lib/physics/types"
@@ -19,8 +19,21 @@ const GROUND_Y = -0.15
  * (re)launch and lets Rapier's solver produce the bounce/trajectory. Live
  * readouts are read straight off the RigidBody so they match what the
  * solver actually produced, not the closed-form guess.
+ *
+ * Wrapped in `memo`: `onReadouts` fires from a `useFrame` tick (~10Hz) and
+ * bubbles a `setState` up to the page, which re-renders this component's
+ * parent with referentially-new (but value-identical) `paramsRef`/`onReadouts`
+ * props. Without `memo`, that re-render reaches the ball's `<RigidBody>`
+ * every ~100ms; @react-three/rapier doesn't value-memoize its own options,
+ * so its internal effect re-fires on every one of those re-renders and
+ * re-calls `setTranslation`/`setRotation`/`setLinvel` on the *live* dynamic
+ * body — stomping the solver's own integration (resetting velocity back to
+ * the original launch vector, fighting the ground contact) and corrupting
+ * the render sync so the mesh never visibly appears. `memo` keeps this
+ * subtree from re-rendering on every readout tick so the RigidBody is only
+ * touched on an actual (re)launch.
  */
-export function ProjectilesScene({
+export const ProjectilesScene = memo(function ProjectilesScene({
   paramsRef,
   onReadouts,
 }: {
@@ -70,9 +83,17 @@ export function ProjectilesScene({
 
   return (
     <Physics gravity={[0, -gravity, 0]}>
-      <RigidBody type="fixed" colliders="cuboid" position={[0, GROUND_Y, 0]}>
+      <RigidBody type="fixed" colliders={false} position={[0, GROUND_Y, 0]}>
+        {/* Half-extent 200m in x: sliders reach speed=60/angle=45/gravity=1,
+            whose closed-form range is in the hundreds of meters — a ground
+            that only spans +/-25m (the original size) is flown past in x
+            well before the ball ever descends back to y=0, so it never
+            re-contacts the ground and just free-falls forever. Even the
+            *default* params (speed 20, angle 45, gravity 9.81 -> range
+            ~40.8m) already exceeded the old +/-25m half-width. */}
+        <CuboidCollider args={[200, 0.15, 3]} restitution={0.55} friction={0.4} />
         <ObjectRenderer
-          object={{ id: "ground", kind: "box", position: [0, 0, 0], color: "#1a2233", meta: { size: [50, 0.3, 6] } }}
+          object={{ id: "ground", kind: "box", position: [0, 0, 0], color: "#1a2233", meta: { size: [400, 0.3, 6] } }}
         />
       </RigidBody>
 
@@ -80,9 +101,10 @@ export function ProjectilesScene({
         <RigidBody
           key={`wall-${launchId}`}
           type="fixed"
-          colliders="cuboid"
+          colliders={false}
           position={[wallDistance, wallHeight / 2, 0]}
         >
+          <CuboidCollider args={[0.2, wallHeight / 2, 1.5]} restitution={0.55} friction={0.4} />
           <ObjectRenderer
             object={{
               id: "wall",
@@ -100,15 +122,15 @@ export function ProjectilesScene({
           key={`ball-${launchId}`}
           ref={bodyRef}
           type="dynamic"
-          colliders="ball"
+          colliders={false}
           position={projectile.position}
           linearVelocity={projectile.velocity}
-          restitution={0.55}
-          friction={0.4}
+          ccd
         >
+          <BallCollider args={[projectile.radius ?? 0.3]} restitution={0.55} friction={0.4} />
           <ObjectRenderer object={{ ...projectile, position: [0, 0, 0] }} />
         </RigidBody>
       )}
     </Physics>
   )
-}
+})
