@@ -173,6 +173,35 @@ function buildLensBundle(params: ScenarioParams, t: number): SceneObject[] {
   return bundled
 }
 
+// light-multiray-01 correction (user-reported "the white light only works for the prism
+// somehow"): the lens's existing bundle above sweeps ray HEIGHT at one fixed wavelength — a
+// "parallel rays converge to one point" demo, with no lens-mode analog of the prism's white-light
+// rainbow. Real lenses do have their own well-known white-light effect, chromatic aberration: the
+// lensmaker's focal length depends on the glass index, which depends on wavelength (the same
+// Cauchy dispersion stepLens already computes, confirmed via BOARD.tsv's f(450nm) vs f(650nm)
+// rows), so different colors focus at slightly different points along the axis. Calls the pure
+// `step()` once per wavelength sample (same lens/height params, only wavelength_nm varies, and at
+// the SAME ray_height_m — the slider's current single height, not the height-sweep) and pulls out
+// each sample's own refracted ray + its own focal-point marker, uniquely re-keyed.
+function buildLensChromaticBundle(params: ScenarioParams, t: number): SceneObject[] {
+  const rayHeightM = THREE.MathUtils.clamp(params.ray_height_m ?? 0.5, -1.5, 1.5)
+  const chromatic: SceneObject[] = []
+  PRISM_FAN_WAVELENGTHS_NM.forEach((wavelength_nm, i) => {
+    const sample = lightStep({ ...params, ray_height_m: rayHeightM, wavelength_nm }, t)
+    const refracted = sample.objects.find((o) => o.id === "refracted-ray")
+    const focal = sample.objects.find((o) => o.id === "focal-point")
+    const legs: SceneObject[] = []
+    if (refracted) legs.push(refracted)
+    // stepLens's own focal-point marker is a fixed maroon/cyan role color (matches the lens
+    // type, not the wavelength) — recolor it here to this sample's real Bruton-mapped ray color
+    // so each chromatic-aberration focal point visibly matches its own ray's hue, same treatment
+    // the prism fan already gives its refracted rays.
+    if (focal && refracted) legs.push({ ...focal, color: refracted.color })
+    clipRayToAperture(legs, rayHeightM).forEach((o) => chromatic.push({ ...o, id: `${o.id}-chroma-${i}` }))
+  })
+  return chromatic
+}
+
 // --- Sin-wave ray rendering ------------------------------------------------------------------
 // "we agree upon making the lights sin waves not straight rays already": every ray SEGMENT
 // below (incident/reflected/refracted, the rainbow fan, the lens bundle, the highlight ray) is
@@ -223,7 +252,7 @@ type RayChainRole = (typeof RAY_CHAIN_ROLE_ORDER)[number]
  * React ids stay unique across samples) back down to the underlying chain role, so segments that
  * belong to the same sampled ray can be matched up regardless of which pass rendered them. */
 function chainRoleOf(id: string): RayChainRole | null {
-  const base = id.replace(/-(fan|bundle)-\d+$/, "")
+  const base = id.replace(/-(fan|bundle|chroma)-\d+$/, "")
   return (RAY_CHAIN_ROLE_ORDER as readonly string[]).includes(base) ? (base as RayChainRole) : null
 }
 
@@ -235,7 +264,7 @@ function chainRoleOf(id: string): RayChainRole | null {
  * re-include `incident-ray` per sample (only the post-first-face legs), so those groups fall back
  * to the single shared `incident-ray`'s own length as the base offset. */
 function buildPhaseOffsets(objects: SceneObject[]): Map<string, number> {
-  const suffixOf = (id: string) => id.match(/-(?:fan|bundle)-\d+$/)?.[0] ?? ""
+  const suffixOf = (id: string) => id.match(/-(?:fan|bundle|chroma)-\d+$/)?.[0] ?? ""
   const groups = new Map<string, Map<RayChainRole, SceneObject>>()
   for (const o of objects) {
     const role = chainRoleOf(o.id)
@@ -436,19 +465,24 @@ export function LightScene({
   // light-multiray-01 correction: the prism's wavelength-sweep rainbow fan is only physically
   // correct as a stand-in for WHITE light (many wavelengths mixed) being dispersed — with a
   // single wavelength selected (the default), a prism produces exactly one colored ray, so the
-  // fan is gated behind the explicit white_light toggle. The lens bundle sweeps ray_height_m at
-  // one fixed wavelength_nm — it's a "parallel rays converge to one focal point" demo, not a
-  // color-mixing one, so it is NOT gated by white_light and stays on regardless.
+  // fan is gated behind the explicit white_light toggle. The lens's default (white_light off)
+  // bundle sweeps ray_height_m at one fixed wavelength_nm — it's a "parallel rays converge to one
+  // focal point" demo, not a color-mixing one, so that path is NOT gated by white_light and stays
+  // on regardless. When white_light IS on, the lens switches to its own real white-light effect
+  // instead: chromatic aberration (see buildLensChromaticBundle) — otherwise the toggle visibly
+  // does nothing in lens mode, which is exactly the reported bug.
   const whiteLightOn = (paramsRef.current.white_light ?? 0) >= 0.5
 
-  // The actual "aha" effect: N extra calls to the same pure step() with only wavelength_nm (prism)
-  // or ray_height_m (lens) swept across a spread, so the real dispersion/convergence math already
-  // in lib/physics/light.ts renders as a visible rainbow fan / converging-ray bundle instead of a
-  // single ray. Recomputed only when `state` changes (useLiveScenario already gates step() calls
-  // behind an actual param change), so this stays cheap — no per-frame cost beyond what a single
-  // ray already had.
+  // The actual "aha" effect: N extra calls to the same pure step() with only wavelength_nm (prism
+  // fan, lens chromatic aberration) or ray_height_m (lens default bundle) swept across a spread,
+  // so the real dispersion/convergence math already in lib/physics/light.ts renders as a visible
+  // rainbow fan / converging-ray bundle / chromatic-aberration spread instead of a single ray.
+  // Recomputed only when `state` changes (useLiveScenario already gates step() calls behind an
+  // actual param change), so this stays cheap — no per-frame cost beyond what a single ray
+  // already had.
   const bundleObjects = useMemo(() => {
     if (isPrism && whiteLightOn) return buildPrismFan(paramsRef.current, state.t)
+    if (isLens && whiteLightOn) return buildLensChromaticBundle(paramsRef.current, state.t)
     if (isLens) return buildLensBundle(paramsRef.current, state.t)
     return []
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -464,6 +498,19 @@ export function LightScene({
   // Matched by id, not reference: clipRayToAperture (lens aperture fix, above) can return clones
   // of highlightObjects' entries rather than the original state.objects references, so a
   // reference-based .includes() would miss those and double-draw the un-clipped original.
+  // White-light fix (light-multiray-01 correction): the "incident-ray" leg is the ray BEFORE it
+  // hits the glass, i.e. still the unmixed source beam. lib/physics/light.ts always colors it via
+  // `rayColor` (wavelength_nm's own Bruton-mapped color) since step() only ever simulates one
+  // wavelength per call — real single-wavelength light, correctly colored. But when the user has
+  // explicitly flipped white_light on, that same slider wavelength is just one of the sample
+  // wavelengths used to build the rainbow fan (prism) / chromatic-aberration spread (lens) below,
+  // not "the" color of the light — white light is a mix of all of them, so the pre-glass ray
+  // should read as white/neutral, with only the POST-refraction rays (already real per-wavelength
+  // colors) showing the individual spectral hues. Applies to both prism and lens now that the
+  // lens has its own real white-light effect (chromatic aberration) to split into.
+  const whiteIncidentRay = (o: SceneObject) =>
+    (isPrism || isLens) && whiteLightOn && o.id === "incident-ray" ? { ...o, color: "#ffffff" } : o
+
   const highlightIds = new Set(highlightObjects.map((o) => o.id))
   const renderedObjects = (isPrism || isLens
     ? state.objects.filter(
@@ -471,24 +518,17 @@ export function LightScene({
       )
     : state.objects
   )
-    // White-light fix (light-multiray-01 correction): the "incident-ray" leg is the ray BEFORE
-    // it hits the prism's glass, i.e. still the unmixed source beam. lib/physics/light.ts always
-    // colors it via `rayColor` (wavelength_nm's own Bruton-mapped color) since step() only ever
-    // simulates one wavelength per call — real single-wavelength light, correctly colored. But
-    // when the user has explicitly flipped white_light on, that same slider wavelength is just
-    // one of the PRISM_FAN_WAVELENGTHS_NM samples used to build the rainbow fan below, not "the"
-    // color of the light — white light is a mix of all of them, so the pre-glass ray should read
-    // as white/neutral, with only the POST-refraction fan rays (already real per-wavelength
-    // colors) showing the individual spectral hues. Lens mode has no such "mixed before / split
-    // after" framing (a lens doesn't disperse into a visible rainbow the way a prism does), so its
-    // incident ray intentionally keeps the slider-wavelength color regardless of white_light.
-    .map((o) => (isPrism && whiteLightOn && o.id === "incident-ray" ? { ...o, color: "#ffffff" } : o))
+    .map(whiteIncidentRay)
     .filter((o) => isFiniteVec3(o.position) && isFiniteVec3(o.velocity))
 
   const finiteBundleObjects = bundleObjects.filter(
     (o) => isFiniteVec3(o.position) && isFiniteVec3(o.velocity)
   )
-  const finiteHighlightObjects = highlightObjects.filter(
+  // The lens's incident-ray (before the glass) lives inside highlightObjects, not
+  // renderedObjects (see highlightObjects above) — needs the same white-light treatment so it
+  // doesn't render as the slider's single-wavelength color while the chromatic bundle below
+  // splits that same beam into its real per-wavelength rays.
+  const finiteHighlightObjects = highlightObjects.map(whiteIncidentRay).filter(
     (o) => isFiniteVec3(o.position) && isFiniteVec3(o.velocity)
   )
 
