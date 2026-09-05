@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, type MutableRefObject } from "react"
 import * as THREE from "three"
-import { Line } from "@react-three/drei"
+import { Line, TransformControls } from "@react-three/drei"
 import { useFrame } from "@react-three/fiber"
 import type { Line2, LineSegments2 } from "three-stdlib"
 import { ObjectRenderer } from "@/components/ObjectRenderer"
@@ -222,9 +222,19 @@ const VISUAL_WAVELENGTH_SCALE_M_PER_NM = 6e-4
 // Perpendicular displacement, modest relative to the scene's ~1-5m object scale so the wave
 // reads as a wiggle on top of the ray, not a chaotic zigzag that obscures the geometry.
 const WAVE_AMPLITUDE_M = 0.08
-// Points per ray segment — dense enough to look smooth, cheap enough that the rainbow fan (up
-// to 8 extra rays) and lens bundle (up to 7 extra rays) don't cost real frame time.
-const WAVE_POINTS_PER_SEGMENT = 28
+// Points-per-segment fix (user screenshot-flagged "jagged/zigzag, not a smooth sinusoid"): the
+// underlying sine math was already confirmed correct in a prior round (see the phase-continuity
+// note below) — the facet look was purely under-sampling. A FIXED 28-point total doesn't scale
+// with how many oscillation cycles actually fit in a given ray segment: a 4m ray at 650nm (red)
+// has visualWavelength ~0.39m (~10.3 cycles across 28 points, ~2.7 points/cycle — visibly
+// faceted), and a shorter 420nm ray packs even more cycles into the same 28 points, making it
+// worse exactly where the coordinator's report said it looked worst. Fix (below, in WaveRay):
+// point count is now computed PER SEGMENT from its own real length/visualWavelength so it always
+// lands at MIN_SAMPLES_PER_CYCLE, instead of one shared constant that starves short-wavelength
+// segments. These two constants replace the old single WAVE_POINTS_PER_SEGMENT.
+const MIN_SAMPLES_PER_CYCLE = 16
+const WAVE_POINTS_FLOOR = 28
+const WAVE_POINTS_CEIL = 240
 // Phase advance rate (rad/s), purely a "looks like it's traveling" visual rate — not tied to c
 // (that would be imperceptibly fast at this scene's scale), just fast enough to clearly read as
 // propagating along the ray direction from frame to frame.
@@ -314,7 +324,6 @@ function WaveRay({
 
   const lineRef = useRef<Line2 | LineSegments2 | null>(null)
   const phaseRef = useRef(0)
-  const flat = useMemo(() => new Float32Array(WAVE_POINTS_PER_SEGMENT * 3), [])
   const scratch = useMemo(() => new THREE.Vector3(), [])
 
   const { origin, dirNorm, perp, visualWavelength } = useMemo(() => {
@@ -337,22 +346,36 @@ function WaveRay({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dir[0], dir[1], dir[2], object.position[0], object.position[1], object.position[2], wavelengthNm])
 
+  // Points-per-segment fix: this segment's own real cycle count (length / visualWavelength)
+  // drives its own sample density, floored/ceiled so a degenerate near-zero-length segment still
+  // gets a sane minimum and a pathologically long one never allocates something absurd.
+  const pointsPerSegment = useMemo(() => {
+    const cycles = length / visualWavelength
+    return THREE.MathUtils.clamp(
+      Math.ceil(cycles * MIN_SAMPLES_PER_CYCLE),
+      WAVE_POINTS_FLOOR,
+      WAVE_POINTS_CEIL
+    )
+  }, [length, visualWavelength])
+
+  const flat = useMemo(() => new Float32Array(pointsPerSegment * 3), [pointsPerSegment])
+
   const initialPoints = useMemo<Vec3[]>(() => {
     const pts: Vec3[] = []
-    for (let i = 0; i < WAVE_POINTS_PER_SEGMENT; i++) {
-      const t = i / (WAVE_POINTS_PER_SEGMENT - 1)
+    for (let i = 0; i < pointsPerSegment; i++) {
+      const t = i / (pointsPerSegment - 1)
       const p = origin.clone().addScaledVector(dirNorm, t * length)
       pts.push([p.x, p.y, p.z])
     }
     return pts
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [origin, dirNorm, length])
+  }, [origin, dirNorm, length, pointsPerSegment])
 
   useFrame((_, delta) => {
     phaseRef.current += delta * WAVE_PROPAGATION_SPEED
     const phase = phaseRef.current
-    for (let i = 0; i < WAVE_POINTS_PER_SEGMENT; i++) {
-      const t = i / (WAVE_POINTS_PER_SEGMENT - 1)
+    for (let i = 0; i < pointsPerSegment; i++) {
+      const t = i / (pointsPerSegment - 1)
       const distAlong = t * length
       // Sine argument uses the CUMULATIVE distance (this segment's own distAlong plus however far
       // prior chained segments already carried the wave) so phase is continuous across the seam
@@ -386,6 +409,199 @@ function WaveRay({
  * slider-selected ray out of the prism/lens bundle rather than losing it in the fan. */
 function HighlightRay({ object, phaseOffsetM = 0 }: { object: SceneObject; phaseOffsetM?: number }) {
   return <WaveRay object={object} lineWidth={5} opacity={1} phaseOffsetM={phaseOffsetM} />
+}
+
+// ---------------------------------------------------------------------------------------------
+// CRUD stage 3 (crud-light-01). Pattern established by crud-fields-01 (FieldsScene.tsx,
+// commit deea424): drei's `TransformControls` with `position` passed as a direct prop on
+// `<TransformControls>` itself (NOT inherited via children — a positioned child renders one
+// place while the gizmo attaches to TransformControls' own internal, unpositioned wrapper group,
+// collapsing every gizmo onto world origin; caught and documented there, re-applied here from
+// the start). `onObjectChange` reads the dragged Object3D's live transform and writes straight
+// into a real `ScenarioParams` field on `paramsRef.current` — the same ref-write every slider in
+// this app already uses — so a drag and a slider drag are physically indistinguishable to
+// `step()`. Nothing here fakes a purely-visual position.
+//
+// What's genuinely draggable in this module, decided per-element:
+//  1. Incidence angle (slab AND prism): stepSlab/stepPrism build the incident ray from the exact
+//     same `(sin(theta1), -cos(theta1), 0)` formula off `angle_deg`, with the interface itself
+//     pinned at the canonical origin y=0 in both paths — there is no independent "interface
+//     position" to drag, only the angle really varies. So this is a ROTATE handle at the
+//     incident ray's own current source point (see IncidenceAngleControls below).
+//  2. Slab interface itself: deliberately gets NO drag handle. Per point 1, the interface is a
+//     fixed plane at a canonical origin in the physics; there is no second real degree of
+//     freedom to fake a handle for.
+//  3. Prism apex angle: real, physically-meaningful drag. TIR handle sits at the wedge's outer
+//     base corner (not the pointed vertex itself, which is pinned at the same fixed y=0 origin
+//     as the slab interface) and translating it along X directly sets `apex_angle_deg` via the
+//     same halfWidth = GAP*tan(apexAngle/2) relation PrismWedge already renders with.
+//  4. Lens ray height: real, physically-meaningful drag. TRANSLATE handle at the point the
+//     incident ray meets the lens (0, ray_height_m, 0), Y-axis only, writing `ray_height_m`.
+//
+// Every handle mesh (small sphere) is scene-only decoration for grabbing — none of them are a
+// physics object step() returns — but every value the handle's drag actually WRITES is a real
+// ScenarioParams field the sliders already control, clamped to that same slider's [min,max].
+const ANGLE_MIN = 0
+const ANGLE_MAX = 89
+const APEX_MIN = 10
+const APEX_MAX = 90
+const RAY_HEIGHT_MIN = -1.5
+const RAY_HEIGHT_MAX = 1.5
+
+// Same shape drei's underlying three-stdlib TransformControls always fires `objectChange` with
+// (`e.target.object` carrying the live attached Object3D) — identical helper to FieldsScene's,
+// duplicated here rather than shared since this tick's file scope is LightScene.tsx only.
+function attachedObjectFrom(e: unknown): THREE.Object3D | undefined {
+  const target = (e as { target?: { object?: THREE.Object3D } } | undefined)?.target
+  return target?.object
+}
+
+/** Rotate-only handle (Z axis — this scene's rays live in the XY plane, same convention WaveRay
+ * already uses) at the incident ray's own current source point. Real physics: `angle_deg` is the
+ * one thing this handle changes.
+ *
+ * Baseline-sync note: `<TransformControls>`'s rotation is a cumulative delta off wherever the
+ * attached Object3D's `.rotation.z` last sat — it is NOT an absolute readout of `angle_deg`. The
+ * effect below resyncs `.rotation.z` to `degToRad(angle_deg)` every time `angle_deg` actually
+ * changes (by this same drag, by the slider, or by the n2-auto-bump effect elsewhere in this
+ * file), so after every drag tick the gizmo's own baseline snaps back to exactly the value it
+ * just wrote — no drift accumulates, and an external slider move is picked up too. Same
+ * rotate-handle family as fields' `MagnetRotateControls`; this file follows that precedent.
+ */
+function IncidenceAngleControls({
+  sourcePosition,
+  angleDeg,
+  paramsRef,
+}: {
+  sourcePosition: Vec3
+  angleDeg: number
+  paramsRef: MutableRefObject<ScenarioParams>
+}) {
+  const controlsRef = useRef<{ object?: THREE.Object3D } | null>(null)
+  const syncedAngleRef = useRef<number | null>(null)
+
+  useEffect(() => {
+    const obj = controlsRef.current?.object
+    if (!obj || syncedAngleRef.current === angleDeg) return
+    obj.rotation.z = THREE.MathUtils.degToRad(angleDeg)
+    syncedAngleRef.current = angleDeg
+  }, [angleDeg])
+
+  return (
+    <TransformControls
+      ref={controlsRef as never}
+      position={sourcePosition}
+      mode="rotate"
+      showX={false}
+      showY={false}
+      showZ
+      onObjectChange={(e) => {
+        const obj = attachedObjectFrom(e)
+        if (!obj) return
+        const deg = THREE.MathUtils.radToDeg(obj.rotation.z)
+        const clamped = THREE.MathUtils.clamp(deg, ANGLE_MIN, ANGLE_MAX)
+        if (clamped !== deg) obj.rotation.z = THREE.MathUtils.degToRad(clamped) // hard stop
+        syncedAngleRef.current = clamped
+        paramsRef.current = { ...paramsRef.current, angle_deg: clamped }
+      }}
+    >
+      <mesh>
+        <sphereGeometry args={[0.14, 16, 16]} />
+        <meshStandardMaterial
+          color={PALETTE.silver}
+          emissive={PALETTE.cyan}
+          emissiveIntensity={0.6}
+          toneMapped={false}
+        />
+      </mesh>
+    </TransformControls>
+  )
+}
+
+/** Translate-only handle (X axis) at the prism wedge's outer base corner — see point 3 above.
+ * Position is a pure function of the current `apex_angle_deg` (same halfWidth formula
+ * PrismWedge renders with), so unlike the rotate handle there is no baseline-sync needed: each
+ * render places the gizmo exactly where that param says the corner is. */
+function PrismApexControls({
+  apexAngleDeg,
+  paramsRef,
+}: {
+  apexAngleDeg: number
+  paramsRef: MutableRefObject<ScenarioParams>
+}) {
+  const halfAngle = THREE.MathUtils.degToRad(apexAngleDeg / 2)
+  const halfWidth = SECOND_INTERFACE_GAP * Math.tan(halfAngle)
+  const handlePos: Vec3 = [halfWidth, -SECOND_INTERFACE_GAP, 0]
+
+  return (
+    <TransformControls
+      position={handlePos}
+      mode="translate"
+      showX
+      showY={false}
+      showZ={false}
+      onObjectChange={(e) => {
+        const obj = attachedObjectFrom(e)
+        if (!obj) return
+        // Keep the handle on the same (+X) side it started on — dragging it across x=0 would
+        // otherwise flip sign and read as a negative-width wedge, which apex_angle_deg can't
+        // express (it's a magnitude, [10,90]).
+        const x = Math.max(obj.position.x, 1e-3)
+        const deg = THREE.MathUtils.radToDeg(2 * Math.atan(x / SECOND_INTERFACE_GAP))
+        const clamped = THREE.MathUtils.clamp(deg, APEX_MIN, APEX_MAX)
+        paramsRef.current = { ...paramsRef.current, apex_angle_deg: clamped }
+      }}
+    >
+      <mesh>
+        <sphereGeometry args={[0.12, 16, 16]} />
+        <meshStandardMaterial
+          color={PALETTE.maroon}
+          emissive={PALETTE.maroon}
+          emissiveIntensity={0.6}
+          toneMapped={false}
+        />
+      </mesh>
+    </TransformControls>
+  )
+}
+
+/** Translate-only handle (Y axis) at the point the incident ray meets the lens — see point 4
+ * above. Position is a pure function of `ray_height_m` (same point stepLens itself uses as
+ * `lensPos`), so like the prism handle this needs no baseline-sync. */
+function LensRayHeightControls({
+  rayHeightM,
+  paramsRef,
+}: {
+  rayHeightM: number
+  paramsRef: MutableRefObject<ScenarioParams>
+}) {
+  const handlePos: Vec3 = [0, rayHeightM, 0]
+
+  return (
+    <TransformControls
+      position={handlePos}
+      mode="translate"
+      showX={false}
+      showY
+      showZ={false}
+      onObjectChange={(e) => {
+        const obj = attachedObjectFrom(e)
+        if (!obj) return
+        const clamped = THREE.MathUtils.clamp(obj.position.y, RAY_HEIGHT_MIN, RAY_HEIGHT_MAX)
+        paramsRef.current = { ...paramsRef.current, ray_height_m: clamped }
+      }}
+    >
+      <mesh>
+        <sphereGeometry args={[0.12, 16, 16]} />
+        <meshStandardMaterial
+          color={PALETTE.cyan}
+          emissive={PALETTE.cyan}
+          emissiveIntensity={0.6}
+          toneMapped={false}
+        />
+      </mesh>
+    </TransformControls>
+  )
 }
 
 export function LightScene({
@@ -534,6 +750,15 @@ export function LightScene({
 
   const apexAngleDeg = (interfaceObj?.meta?.apex_angle_deg as number | undefined) ?? 60
 
+  // CRUD stage 3 drag handles (see the file-header note above IncidenceAngleControls for what's
+  // real vs. decorative). Sourced straight off `state`/`interfaceObj` — the same values step()
+  // just actually used this frame — rather than re-deriving from paramsRef, so a handle's own
+  // position always matches what's genuinely on screen.
+  const incidentRayObj = state.objects.find((o) => o.id === "incident-ray")
+  const currentAngleDeg =
+    (incidentRayObj?.meta?.angle_deg as number | undefined) ?? paramsRef.current.angle_deg ?? 30
+  const currentRayHeightM = THREE.MathUtils.clamp(paramsRef.current.ray_height_m ?? 0.5, -1.5, 1.5)
+
   // Phase-continuity fix (see buildPhaseOffsets above): computed once over every ray object about
   // to be drawn as a WaveRay this frame — the main pass, the fan, and the highlight all share ids
   // that resolve to the same fixed chain topology, so one shared map covers all three loops below.
@@ -560,6 +785,18 @@ export function LightScene({
       ))}
       {isPrism && <PrismWedge apexAngleDeg={apexAngleDeg} />}
       {isLens && <LensShape converging={role === "convex-lens"} />}
+
+      {/* CRUD stage 3 drag handles — see the note above IncidenceAngleControls for exactly what
+          each one is real vs. decorative about. */}
+      {!isLens && incidentRayObj && (
+        <IncidenceAngleControls
+          sourcePosition={incidentRayObj.position}
+          angleDeg={currentAngleDeg}
+          paramsRef={paramsRef}
+        />
+      )}
+      {isPrism && <PrismApexControls apexAngleDeg={apexAngleDeg} paramsRef={paramsRef} />}
+      {isLens && <LensRayHeightControls rayHeightM={currentRayHeightM} paramsRef={paramsRef} />}
     </group>
   )
 }
