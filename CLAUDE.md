@@ -95,6 +95,13 @@ Hacking runs **10:00 AM–1:00 PM, 1:45–6:00 PM**, submissions due **6:00 PM s
 verifier kicks it back to `doing`, dispatch the owning builder with the fix from `note`, and
 repeat. Never skip from a builder's commit straight to "looks done." Once verified, push.
 
+**Don't leave one role idle just because the other is mid-task on something unrelated.** If
+`engine` is running a fix/integration and `scene` has nothing in `doing`/`backlog` blocking on
+that specific work, dispatch `scene` onto the next available backlog item (e.g. `beauty-01`)
+in parallel — same for the reverse. Only hold off dispatching a second agent when it would
+touch the same files as one already running (check what the in-flight agent's task actually
+covers, not just its owner name).
+
 All shared state lives in one append-only, tab-separated file. Never edit a line, only append
 with `>>`. **The last row for a given `kind` + `id` is the current truth.**
 
