@@ -1,47 +1,21 @@
-// Reflection + refraction (Snell's law) for a ray crossing TWO sequential flat interfaces:
-// medium1 -> medium2 -> medium3 (e.g. air -> glass -> water). Two chained applications of
-// Snell's law, each checked independently for total internal reflection — not a new law.
+// Reflection + refraction (Snell's law) across a SELECTABLE optical element.
 //
-// Params:
-//   angle_deg     — angle of incidence, measured from the surface normal, in degrees. [0, 89]
-//   n1            — refractive index of the medium the ray starts in (the denser medium the ray
-//                   is leaving). Default 1.5 (glass). Range [1.0, 2.5].
-//   n2            — refractive index of the second medium, AT the reference wavelength 589nm
-//                   (sodium D line). Default 1.0 (air). Range [1.0, 2.5].
-//   n3            — refractive index of the THIRD medium the ray enters after crossing the
-//                   second interface, at the reference wavelength. Default equals n2 (1.0), which
-//                   makes the second interface a physical no-op (n3==n2 -> theta stays the same,
-//                   ray keeps going straight through) so the module reduces EXACTLY to the old
-//                   single-interface behavior when n3=n2 — nothing already-verified regresses.
-//                   Range [1.0, 2.5].
-//   wavelength_nm — visible wavelength of the ray, nm. Default 590 (was a fixed constant).
-//                   Range [400, 700]. Drives two real effects:
-//                     (a) the ray's rendered color, via a standard wavelength->RGB mapping
-//                         (Bruton's algorithm, a public-domain piecewise formula).
-//                     (b) a small real chromatic dispersion: the actual index of refraction
-//                         used in Snell's law for medium 2/3 is n_eff(wavelength_nm), computed
-//                         via Cauchy's equation n(lambda) = A + B/lambda^2, calibrated so
-//                         n_eff(589nm) == the slider value exactly — this keeps the
-//                         wavelength_nm=590 default numerically identical to the pre-existing
-//                         behavior (regression-safe), while sweeping wavelength_nm away from
-//                         590 now visibly changes the refraction angle by a small, physically
-//                         real amount, same as a prism.
+// `element_type` (numeric code — ScenarioParams is frozen as Record<string, number> per
+// CONTRACT.md, so the element choice is encoded as a number, not a string):
+//   0 = flat glass SLAB (default) — the original two-parallel-interface n1->n2->n3 path from
+//       engine-05, byte-for-byte unchanged below. This is the regression baseline: every prior
+//       verified check (Snell's law, TIR, critical angle, dispersion) must reproduce identically
+//       when element_type is 0 or omitted.
+//   1 = PRISM — two interfaces at an apex angle A, real angular deviation via
+//       delta = theta1 + theta4 - A.
+//   2 = CONVEX (converging) LENS — thin-lens paraxial approximation, focal length from the
+//       lensmaker's equation.
+//   3 = CONCAVE (diverging) LENS — same lensmaker's equation, negative focal length.
 //
-// The ray travels from medium n1 into medium n2 at the first (y=0) interface, then — if it
-// isn't totally internally reflected there — continues from n2 into n3 at a second interface
-// (y=-2), using the FIRST refracted ray's own direction as the second interface's incidence
-// direction (chained Snell's law), with its own independent TIR check at n2->n3.
-//
-// Sweeping angle_deg from 0 to 89 with n1 > n2 (the default: glass -> air) crosses the first
-// critical angle asin(n2/n1) — e.g. n1 = 1.5, n2 = 1.0 gives a critical angle of ~41.8°, so total
-// internal reflection is visibly reachable by turning the angle slider past that point. That's
-// the "aha" moment for this module; the second interface adds a second, independent one (e.g.
-// glass -> water -> air can TIR at the second boundary even when the first one doesn't).
-//
-// All vector work (reflect, dot, normalize, cross) goes through THREE.Vector3/THREE.Ray. Only
-// Snell's law itself (n1 sin(theta1) = n2 sin(theta2), applied twice), Cauchy's dispersion
-// equation, and the wavelength->RGB piecewise formula are hand-written, since no generic vector
-// library computes any of those for you.
+// All vector work (reflect, normalize, cross, applyAxisAngle) goes through THREE.Vector3. Only
+// the physical laws themselves (Snell's law, the prism-geometry apex relation r1+r2=A, the
+// deviation formula, the lensmaker's equation, Cauchy dispersion, wavelength->RGB) are
+// hand-written, since no generic vector library computes any of those for you.
 
 import * as THREE from "three"
 import type { ScenarioParams, ScenarioState, SceneObject } from "./types"
@@ -50,13 +24,13 @@ import type { ScenarioParams, ScenarioState, SceneObject } from "./types"
 // crown glass), converted so the visible-spectrum dispersion spread it produces (~0.01-0.02 in
 // index across 400-700nm) is a realistic small chromatic-dispersion effect, not an invented one.
 const CAUCHY_B_NM2 = 4200
-// Calibration wavelength for n2's slider value. Matches the module's pre-existing default
+// Calibration wavelength for a medium's slider value. Matches the module's pre-existing default
 // wavelength_nm (590) exactly, so the default state's refraction numbers are byte-identical to
 // the original no-wavelength-slider behavior (regression-safe).
 const REFERENCE_WAVELENGTH_NM = 590
 
-// Generic Cauchy-dispersion lookup, used for both the n2 and n3 sliders (same formula/law
-// applied to whichever medium's slider value is passed in).
+// Generic Cauchy-dispersion lookup, used for n2/n3/prism-n/lens-n (same formula/law applied to
+// whichever medium's slider value is passed in).
 function nAtWavelength(nSlider: number, wavelengthNm: number): number {
   // Calibrate A so that n(REFERENCE_WAVELENGTH_NM) === nSlider exactly (regression-safe default).
   const a = nSlider - CAUCHY_B_NM2 / (REFERENCE_WAVELENGTH_NM * REFERENCE_WAVELENGTH_NM)
@@ -122,6 +96,18 @@ function wavelengthToColor(wavelengthNm: number): string {
 const SECOND_INTERFACE_GAP = 1.5
 
 export function step(params: ScenarioParams, t: number): ScenarioState {
+  const elementType = Math.round(params.element_type ?? 0)
+  if (elementType === 1) return stepPrism(params, t)
+  if (elementType === 2) return stepLens(params, t, /* converging */ true)
+  if (elementType === 3) return stepLens(params, t, /* converging */ false)
+  return stepSlab(params, t)
+}
+
+// ---------------------------------------------------------------------------------------------
+// element_type 0 (default): flat glass SLAB — two parallel interfaces, n1 -> n2 -> n3.
+// UNCHANGED from the pre-existing engine-05 implementation (regression baseline).
+// ---------------------------------------------------------------------------------------------
+function stepSlab(params: ScenarioParams, t: number): ScenarioState {
   const angleDeg = params.angle_deg ?? 30
   const n1 = params.n1 ?? 1.5
   const n2Slider = params.n2 ?? 1.0
@@ -306,6 +292,313 @@ export function step(params: ScenarioParams, t: number): ScenarioState {
     {
       label: "critical angle (2nd interface)",
       value: criticalAngle2Deg !== null ? `${criticalAngle2Deg.toFixed(1)} deg` : "n/a (n3 >= n2)",
+    },
+  ]
+
+  return { t, objects, readouts }
+}
+
+// ---------------------------------------------------------------------------------------------
+// element_type 1: PRISM. Two flat faces meeting at apex angle A. Real angular deviation:
+//   delta = theta1 + theta4 - A
+// where theta1 is the incidence angle at face 1 and theta4 is the exit angle at face 2, each
+// individually from Snell's law, chained through the well-known prism-geometry relation
+// r1 + r2 = A (the two internal refraction angles sum to the apex angle — a geometric theorem
+// about the two face normals meeting at angle A, not a new physical law).
+//
+// Params:
+//   angle_deg      — theta1, incidence angle at face 1, degrees. [0, 89]. Default 40.
+//   n1             — external medium index (default 1.0, air).
+//   n2             — prism glass index at the reference wavelength (default 1.5).
+//   apex_angle_deg — apex angle A, degrees. [10, 90]. Default 60 (a standard prism).
+//   wavelength_nm  — as in the slab; also drives real chromatic dispersion of the prism glass
+//                    via the same Cauchy equation, which is exactly why real prisms split white
+//                    light into a spectrum (different wavelengths deviate by different amounts).
+// ---------------------------------------------------------------------------------------------
+function stepPrism(params: ScenarioParams, t: number): ScenarioState {
+  const angleDeg = THREE.MathUtils.clamp(params.angle_deg ?? 40, 0, 89.9)
+  const n1 = params.n1 ?? 1.0
+  const n2Slider = params.n2 ?? 1.5
+  const apexAngleDeg = THREE.MathUtils.clamp(params.apex_angle_deg ?? 60, 10, 90)
+  const wavelengthNm = THREE.MathUtils.clamp(params.wavelength_nm ?? 590, 400, 700)
+
+  const n2 = nAtWavelength(n2Slider, wavelengthNm)
+  const rayColor = wavelengthToColor(wavelengthNm)
+
+  const theta1 = THREE.MathUtils.degToRad(angleDeg)
+  const apexAngle = THREE.MathUtils.degToRad(apexAngleDeg)
+
+  // Face 1: normal (0,1,0) at the origin, same convention as the slab.
+  const normal1 = new THREE.Vector3(0, 1, 0)
+  const hitPoint1 = new THREE.Vector3(0, 0, 0)
+  const zAxis = new THREE.Vector3(0, 0, 1)
+
+  const incidentDir = new THREE.Vector3(Math.sin(theta1), -Math.cos(theta1), 0).normalize()
+  const sourcePos = hitPoint1.clone().sub(incidentDir.clone().multiplyScalar(4))
+  const reflectedDir = incidentDir.clone().reflect(normal1).normalize()
+
+  // Snell's law at face 1: n1 sin(theta1) = n2 sin(r1).
+  const sinR1 = (n1 / n2) * Math.sin(theta1)
+  const tirAtFace1 = Math.abs(sinR1) > 1
+
+  const objects: SceneObject[] = []
+
+  objects.push({
+    id: "interface",
+    kind: "box",
+    position: [0, 0, 0],
+    color: "#334155",
+    meta: { role: "prism-face-1", n1, n2, apex_angle_deg: apexAngleDeg },
+  })
+  objects.push({
+    id: "interface-2",
+    kind: "box",
+    position: [0, -SECOND_INTERFACE_GAP, 0],
+    color: "#334155",
+    meta: { role: "prism-face-2", n1, n2, apex_angle_deg: apexAngleDeg },
+  })
+  objects.push({
+    id: "incident-ray",
+    kind: "ray",
+    position: [sourcePos.x, sourcePos.y, sourcePos.z],
+    velocity: [incidentDir.x, incidentDir.y, incidentDir.z],
+    color: rayColor,
+    meta: { role: "incident", angle_deg: angleDeg, wavelength_nm: wavelengthNm },
+  })
+  objects.push({
+    id: "reflected-ray",
+    kind: "ray",
+    position: [hitPoint1.x, hitPoint1.y, hitPoint1.z],
+    velocity: [reflectedDir.x, reflectedDir.y, reflectedDir.z],
+    color: rayColor,
+    meta: { role: "reflected", angle_deg: angleDeg, wavelength_nm: wavelengthNm },
+  })
+
+  let r1Deg: number | null = null
+  let r2Deg: number | null = null
+  let theta4Deg: number | null = null
+  let deviationDeg: number | null = null
+  let tirAtFace2 = false
+
+  if (!tirAtFace1) {
+    const r1 = Math.asin(sinR1)
+    r1Deg = THREE.MathUtils.radToDeg(r1)
+
+    // Internal ray direction inside the glass, refracted at face 1.
+    const tangent = new THREE.Vector3(incidentDir.x, 0, incidentDir.z)
+    if (tangent.lengthSq() > 1e-12) tangent.normalize()
+    const internalDir = tangent
+      .multiplyScalar(Math.sin(r1))
+      .add(new THREE.Vector3(0, -Math.cos(r1), 0))
+      .normalize()
+
+    // Face 2 hit point: a fixed rendering-space distance along the internal ray (same spirit as
+    // SECOND_INTERFACE_GAP for the slab — a visual placement choice, not a plane-intersection
+    // solve; the physics below doesn't depend on it).
+    const hitPoint2 = hitPoint1.clone().add(internalDir.clone().multiplyScalar(SECOND_INTERFACE_GAP * 1.2))
+
+    objects.push({
+      id: "refracted-ray",
+      kind: "ray",
+      position: [hitPoint1.x, hitPoint1.y, hitPoint1.z],
+      velocity: [internalDir.x, internalDir.y, internalDir.z],
+      color: rayColor,
+      meta: { role: "refracted", angle_deg: r1Deg, wavelength_nm: wavelengthNm },
+    })
+
+    // Real prism geometry: the two face normals meet at the apex angle A, which means the two
+    // internal angles (measured from each face's own normal) sum to A: r1 + r2 = A.
+    const r2 = apexAngle - r1
+    r2Deg = THREE.MathUtils.radToDeg(r2)
+
+    // Snell's law at face 2, glass -> external medium: n2 sin(r2) = n1 sin(theta4).
+    const sinTheta4 = (n2 / n1) * Math.sin(r2)
+    tirAtFace2 = Math.abs(sinTheta4) > 1 || r2 < 0
+
+    if (!tirAtFace2) {
+      const theta4 = Math.asin(sinTheta4)
+      theta4Deg = THREE.MathUtils.radToDeg(theta4)
+      // Total angular deviation of the ray, exact by definition: the exit ray is the incident
+      // ray rotated by delta about the axis perpendicular to the plane of incidence (Z here).
+      deviationDeg = angleDeg + theta4Deg - apexAngleDeg
+      const exitDir = incidentDir
+        .clone()
+        .applyAxisAngle(zAxis, THREE.MathUtils.degToRad(deviationDeg))
+        .normalize()
+
+      objects.push({
+        id: "refracted-ray-2",
+        kind: "ray",
+        position: [hitPoint2.x, hitPoint2.y, hitPoint2.z],
+        velocity: [exitDir.x, exitDir.y, exitDir.z],
+        color: rayColor,
+        meta: { role: "refracted-2", angle_deg: theta4Deg, deviation_deg: deviationDeg, wavelength_nm: wavelengthNm },
+      })
+    } else {
+      // TIR at face 2 (common at steep angles / high index prisms): reflect the internal ray
+      // off face 2's normal instead of exiting.
+      const normal2 = normal1.clone().applyAxisAngle(zAxis, apexAngle)
+      const reflectedDir2 = internalDir.clone().reflect(normal2).normalize()
+      objects.push({
+        id: "refracted-ray-2",
+        kind: "ray",
+        position: [hitPoint2.x, hitPoint2.y, hitPoint2.z],
+        velocity: [reflectedDir2.x, reflectedDir2.y, reflectedDir2.z],
+        color: rayColor,
+        meta: { role: "reflected-2-tir", angle_deg: r1Deg, wavelength_nm: wavelengthNm },
+      })
+    }
+  }
+
+  const readouts: ScenarioState["readouts"] = [
+    { label: "angle of incidence", value: `${angleDeg.toFixed(1)} deg` },
+    { label: "apex angle (A)", value: `${apexAngleDeg.toFixed(1)} deg` },
+    { label: "n1 (external medium)", value: n1.toFixed(3) },
+    { label: "n2 (prism glass, at this wavelength)", value: n2.toFixed(4) },
+    { label: "wavelength", value: `${wavelengthNm.toFixed(0)} nm` },
+    { label: "ray color", value: rayColor },
+    {
+      label: "angle of refraction",
+      value: tirAtFace1 ? "n/a (TIR)" : `${(r1Deg ?? 0).toFixed(1)} deg`,
+    },
+    { label: "total internal reflection", value: tirAtFace1 ? "yes" : "no" },
+    {
+      label: "internal angle at face 2 (r2)",
+      value: tirAtFace1 ? "n/a" : `${(r2Deg ?? 0).toFixed(1)} deg`,
+    },
+    {
+      label: "angle of refraction (2nd interface)",
+      value: tirAtFace1 || tirAtFace2 ? "n/a (TIR)" : `${(theta4Deg ?? 0).toFixed(1)} deg`,
+    },
+    {
+      label: "total internal reflection (2nd interface)",
+      value: tirAtFace1 ? "n/a" : tirAtFace2 ? "yes" : "no",
+    },
+    {
+      label: "angular deviation",
+      value: deviationDeg !== null ? `${deviationDeg.toFixed(2)} deg` : "n/a (TIR)",
+    },
+  ]
+
+  return { t, objects, readouts }
+}
+
+// ---------------------------------------------------------------------------------------------
+// element_type 2/3: thin CONVEX (converging) / CONCAVE (diverging) LENS.
+//
+// Focal length from the lensmaker's equation: 1/f = (n-1)(1/R1 - 1/R2), with the standard sign
+// convention (R positive if the surface's center of curvature is on the far/outgoing side).
+// A biconvex lens (R1 > 0, R2 < 0) gives f > 0 (converging); a biconcave lens (R1 < 0, R2 > 0)
+// gives f < 0 (diverging) — the SAME formula, just different radii signs, exactly as real optics
+// textbooks do it. This module does NOT ray-trace the actual curved surfaces (that needs full
+// surface-normal refraction at each curved boundary); it uses the standard thin-lens PARAXIMAL
+// approximation — a real, textbook-standard simplification, not full curved-surface ray tracing
+// — to bend a ray parallel to the optical axis toward (converging) or away from (diverging) the
+// focal point.
+//
+// Params:
+//   R1_m, R2_m    — radii of curvature of the two lens surfaces, meters. Defaults: biconvex
+//                    (0.5, -0.5) for the converging lens, biconcave (-0.5, 0.5) for the
+//                    diverging lens.
+//   n2            — lens glass index at the reference wavelength (default 1.5).
+//   ray_height_m  — height of the incoming ray above the optical axis, meters. [-1.5, 1.5],
+//                    default 0.5.
+//   wavelength_nm — also drives real chromatic aberration: the lens index (and therefore f)
+//                    depends on wavelength via the same Cauchy dispersion used elsewhere.
+//
+// Geometry: optical axis = X axis, lens plane at x=0, ray travels in +X. Ray starts at
+// (-4, ray_height_m, 0) parallel to the axis, hits the lens at (0, ray_height_m, 0).
+//
+// Verified paraxial construction (see engine's hand-check below): the outgoing ray direction is
+//   dir = normalize( (|f|, -h * sign(f), 0) )
+// For f > 0 (converging): this sends the ray toward the axis, crossing it at exactly x = f past
+// the lens — the textbook "parallel ray -> real focal point" rule.
+// For f < 0 (diverging): this sends the ray AWAY from the axis, and its backward extension
+// crosses the axis at exactly x = f (behind/before the lens, at distance |f|) — the textbook
+// "parallel ray -> appears to diverge from the virtual front focal point" rule.
+// ---------------------------------------------------------------------------------------------
+function stepLens(params: ScenarioParams, t: number, converging: boolean): ScenarioState {
+  const nSlider = params.n2 ?? 1.5
+  const wavelengthNm = THREE.MathUtils.clamp(params.wavelength_nm ?? 590, 400, 700)
+  const n = nAtWavelength(nSlider, wavelengthNm)
+  const rayColor = wavelengthToColor(wavelengthNm)
+
+  const R1 = params.R1_m ?? (converging ? 0.5 : -0.5)
+  const R2 = params.R2_m ?? (converging ? -0.5 : 0.5)
+  const rayHeight = THREE.MathUtils.clamp(params.ray_height_m ?? 0.5, -1.5, 1.5)
+
+  // Lensmaker's equation: 1/f = (n - 1)(1/R1 - 1/R2).
+  const invF = (n - 1) * (1 / R1 - 1 / R2)
+  const f = invF !== 0 ? 1 / invF : Infinity
+
+  const lensPos = new THREE.Vector3(0, rayHeight, 0)
+  const sourcePos = new THREE.Vector3(-4, rayHeight, 0)
+  const incidentDir = new THREE.Vector3(1, 0, 0)
+
+  // Paraxial thin-lens ray-bend rule (see header comment for the derivation/verification).
+  const sign = Math.sign(f) || 1
+  const outDir = new THREE.Vector3(Math.abs(f), -rayHeight * sign, 0).normalize()
+
+  const objects: SceneObject[] = []
+
+  objects.push({
+    id: "interface",
+    kind: "box",
+    position: [0, 0, 0],
+    color: "#334155",
+    meta: {
+      role: converging ? "convex-lens" : "concave-lens",
+      n,
+      R1_m: R1,
+      R2_m: R2,
+      focal_length_m: f,
+    },
+  })
+
+  objects.push({
+    id: "incident-ray",
+    kind: "ray",
+    position: [sourcePos.x, sourcePos.y, sourcePos.z],
+    velocity: [incidentDir.x, incidentDir.y, incidentDir.z],
+    color: rayColor,
+    meta: { role: "incident", ray_height_m: rayHeight, wavelength_nm: wavelengthNm },
+  })
+
+  objects.push({
+    id: "refracted-ray",
+    kind: "ray",
+    position: [lensPos.x, lensPos.y, lensPos.z],
+    velocity: [outDir.x, outDir.y, outDir.z],
+    color: rayColor,
+    meta: { role: "refracted", focal_length_m: f, wavelength_nm: wavelengthNm },
+  })
+
+  // Mark the (real or virtual) focal point explicitly so the "aha" — ray crossing the axis at
+  // f, or appearing to diverge from -f — is visible on screen.
+  objects.push({
+    id: "focal-point",
+    kind: "sphere",
+    position: [f, 0, 0],
+    radius: 0.08,
+    color: converging ? "#f43f5e" : "#22d3ee",
+    meta: { role: "focal-point", focal_length_m: f, virtual: !converging },
+  })
+
+  const readouts: ScenarioState["readouts"] = [
+    { label: "lens type", value: converging ? "convex (converging)" : "concave (diverging)" },
+    { label: "R1 (surface 1)", value: `${R1.toFixed(3)} m` },
+    { label: "R2 (surface 2)", value: `${R2.toFixed(3)} m` },
+    { label: "n (lens glass, at this wavelength)", value: n.toFixed(4) },
+    { label: "wavelength", value: `${wavelengthNm.toFixed(0)} nm` },
+    { label: "ray color", value: rayColor },
+    { label: "ray height above axis", value: `${rayHeight.toFixed(2)} m` },
+    {
+      label: "focal length (f)",
+      value: Number.isFinite(f) ? `${f.toFixed(4)} m` : "infinite (flat, n=1)",
+    },
+    {
+      label: "focal point type",
+      value: converging ? "real (behind lens)" : "virtual (in front of lens)",
     },
   ]
 
