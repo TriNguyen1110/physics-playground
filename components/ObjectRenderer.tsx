@@ -50,7 +50,14 @@ function BoxObject({ object }: { object: SceneObject }) {
   return (
     <mesh position={object.position} receiveShadow>
       <boxGeometry args={size} />
-      <meshStandardMaterial color="#12131a" emissive={object.color} emissiveIntensity={0.15} roughness={0.9} metalness={0.1} />
+      {/* emissiveIntensity bumped 0.15->0.4 and base color lifted slightly
+          (#12131a->#1c1e29): at 0.15 the ground/wall slabs were only a hair
+          brighter than the near-black void+fog they sit in front of, so at
+          the projectiles camera's longer draw distance they read as flat
+          black instead of visible geometry (see CameraRig.tsx notes on the
+          projectiles preset). Still dark/cold per the Beaker-by-Thix look,
+          just no longer indistinguishable from empty space. */}
+      <meshStandardMaterial color="#1c1e29" emissive={object.color} emissiveIntensity={0.4} roughness={0.9} metalness={0.1} />
     </mesh>
   )
 }

@@ -40,21 +40,44 @@ export const ProjectilesScene = memo(function ProjectilesScene({
   paramsRef: MutableRefObject<ScenarioParams>
   onReadouts: (r: ScenarioState["readouts"]) => void
 }) {
+  // "resting" = ball sits visibly at the launch point, not yet fired — the
+  // page loads into this state (and stays there after a module switch)
+  // instead of auto-firing on mount, so there's always something to see
+  // before the user ever touches Launch. "flying" = a real dynamic
+  // RigidBody has been fired and is under Rapier's solver.
+  const [phase, setPhase] = useState<"resting" | "flying">("resting")
   const [launchId, setLaunchId] = useState(0)
   const [initial, setInitial] = useState<ScenarioState>(() => projectilesStep(paramsRef.current, 0))
-  const lastKey = useRef(JSON.stringify(paramsRef.current))
+  // `_launchToken` is a scene-owned, non-slider key that ControlPanel's
+  // "Launch" button bumps directly on `paramsRef.current` (same ref the
+  // sliders write to) — this is the ONLY thing that (re)fires the ball.
+  // Dragging a slider alone only updates the resting preview below, it
+  // never fires by itself, so there's exactly one obvious control for
+  // "make the ball go" and it can be clicked repeatedly.
+  const lastLaunchToken = useRef<number>(paramsRef.current._launchToken ?? 0)
   const bodyRef = useRef<RapierRigidBody>(null)
   const frameCount = useRef(0)
 
-  // Re-launch (fresh RigidBody with new initial velocity) whenever a slider
-  // actually changes value — not every frame.
+  // While resting, keep the closed-form preview readouts live as sliders
+  // move, so the readout panel isn't frozen before the first launch.
   useFrame(() => {
-    const key = JSON.stringify(paramsRef.current)
-    if (key !== lastKey.current) {
-      lastKey.current = key
+    if (phase !== "resting") return
+    const next = projectilesStep(paramsRef.current, 0)
+    setInitial(next)
+    onReadouts(next.readouts)
+  })
+
+  // Explicit (re)launch: only fires when `_launchToken` changes, i.e. only
+  // when the Launch button was clicked — captures whatever the sliders read
+  // right now.
+  useFrame(() => {
+    const token = paramsRef.current._launchToken ?? 0
+    if (token !== lastLaunchToken.current) {
+      lastLaunchToken.current = token
       const next = projectilesStep(paramsRef.current, 0)
       setInitial(next)
       setLaunchId((id) => id + 1)
+      setPhase("flying")
       onReadouts(next.readouts)
     }
   })
@@ -62,6 +85,7 @@ export const ProjectilesScene = memo(function ProjectilesScene({
   // Live readout straight from Rapier's solver, throttled to ~10Hz — plenty
   // fast to look continuous, cheap enough not to matter.
   useFrame(() => {
+    if (phase !== "flying") return
     frameCount.current += 1
     if (frameCount.current % 6 !== 0) return
     const body = bodyRef.current
@@ -117,7 +141,17 @@ export const ProjectilesScene = memo(function ProjectilesScene({
         </RigidBody>
       )}
 
-      {projectile && (
+      {/* Resting: a fixed body sitting visibly at the launch point before
+          the user has ever clicked Launch (or right after a slider change,
+          since dragging alone no longer fires the ball). */}
+      {projectile && phase === "resting" && (
+        <RigidBody key={`rest-${launchId}`} type="fixed" colliders={false} position={projectile.position}>
+          <BallCollider args={[projectile.radius ?? 0.3]} />
+          <ObjectRenderer object={{ ...projectile, position: [0, 0, 0] }} />
+        </RigidBody>
+      )}
+
+      {projectile && phase === "flying" && (
         <RigidBody
           key={`ball-${launchId}`}
           ref={bodyRef}

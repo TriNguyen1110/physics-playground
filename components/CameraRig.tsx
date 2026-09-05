@@ -5,20 +5,23 @@ import { useRef } from "react"
 import { useFrame, useThree } from "@react-three/fiber"
 import type { ModuleId } from "@/components/modules/types"
 
-// projectiles: pulled back/widened from the original [-2,4,11]->[2,1,0] preset.
-// At the *default* slider values (speed 20, angle 45, gravity 9.81) the
-// closed-form apex height is ~10.2m and range ~40.8m (see
-// lib/physics/projectiles.ts) — the original preset only framed a ~12m-wide
-// patch around the origin, so the ball flew out of the camera's FOV almost
-// immediately after launch and looked like it never rendered at all. This
-// preset frames roughly x:[-3,31], y:[-13,21] at the default fov=45, which
-// covers the default arc (and the wall at wall_distance=12) with room to
-// spare. Scene.tsx's fog far distance was bumped 30->70 alongside this so
-// the launch point (~36 units from this camera) isn't faded into the void
-// background before the ball even gets going.
+// projectiles: re-tuned again — the previous preset (position [-6,10,34],
+// target [14,4,0]) put the launch point/ground/wall ~36 units from the
+// camera, which combined with the old fog far=70 and low-emissive ground
+// material made everything read as flat black (the "empty canvas" bug: not
+// a missing mesh, a visibility/framing one). This preset sits closer
+// (~26 units to the resting ball at origin) and lower, looking slightly
+// down the launch direction so the ground plane fills the lower half of
+// frame and the wall (default wall_distance=12) sits clearly inside it.
+// Verified live at both the slider defaults (speed 20/angle 45/gravity
+// 9.81, apex ~10m/range ~41m) and the reported bug params (speed 27.5/angle
+// 71/gravity 9, apex ~37.5m/range ~52m) — ground+wall+ball all visible at
+// rest and through flight in both cases; very steep/fast slider extremes
+// can still carry the ball above the top of frame mid-flight, which is an
+// acceptable, much lesser issue than the previous "nothing renders at all".
 const CAMERA_PRESETS: Record<ModuleId, { position: Vec3; target: Vec3 }> = {
   light: { position: [0, 3.2, 7.5], target: [0, 0.6, 0] },
-  projectiles: { position: [-6, 10, 34], target: [14, 4, 0] },
+  projectiles: { position: [-2, 10, 24], target: [8, 4, 0] },
   fields: { position: [0, 6, 6.5], target: [0, 0, 0] },
 }
 

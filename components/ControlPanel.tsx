@@ -47,6 +47,24 @@ export function ControlPanel({
           />
         </label>
       ))}
+      {module === "projectiles" && (
+        <button
+          type="button"
+          data-testid="launch-button"
+          onClick={() => {
+            // Bumping `_launchToken` on the shared params ref is the one
+            // signal ProjectilesScene watches to (re)fire the ball — see
+            // components/modules/ProjectilesScene.tsx. Clicking again with
+            // the same slider values still bumps the token, so repeated
+            // clicks always re-run the shot.
+            paramsRef.current._launchToken = (paramsRef.current._launchToken ?? 0) + 1
+          }}
+          className="mt-1 rounded-xl px-4 py-2.5 text-sm font-semibold uppercase tracking-wide text-black transition-transform active:scale-95"
+          style={{ backgroundColor: accent }}
+        >
+          Launch
+        </button>
+      )}
     </div>
   )
 }

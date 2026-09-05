@@ -32,19 +32,30 @@ export function Scene({
   return (
     <>
       <color attach="background" args={[VOID_COLOR]} />
-      {/* far bumped 30->70: the projectiles camera preset sits further back
-          (to keep the ball's full default-parameter arc in frame — see
-          CameraRig.tsx) than light/fields' cameras, which are all within
-          ~10 units of their content and unaffected by raising this. */}
-      <fog attach="fog" args={[VOID_COLOR, 8, 70]} />
+      {/* far bumped 30->70->110: the projectiles camera preset sits further
+          back than that (see CameraRig.tsx) to fit both the default arc and
+          steeper/faster launches the sliders can reach — at far=70 the
+          ground/wall/ball were fogged down to near-indistinguishable-from-
+          black at that distance, which was the root cause of the "empty
+          canvas" bug, not a missing mesh. light/fields' cameras stay within
+          ~10 units of their content and are unaffected by raising this. */}
+      <fog attach="fog" args={[VOID_COLOR, 8, module === "projectiles" ? 110 : 70]} />
 
       <CameraRig module={module} />
 
       {/* Dim, cold base lighting — the glowing simulation elements are the
           light source the eye actually reads, not this. */}
-      <ambientLight intensity={0.12} />
+      <ambientLight intensity={module === "projectiles" ? 0.22 : 0.12} />
       <directionalLight position={[4, 6, 3]} intensity={0.25} color="#cfe8ff" />
       <pointLight position={[0, 3, 2]} intensity={0.6} color={RIM_LIGHT_COLOR[module]} distance={12} decay={2} />
+      {/* Projectiles' camera sits much further from its content than the
+          other two modules' (see CameraRig.tsx) — the two lights above are
+          both tuned for a ~10-unit radius and don't reach the ground/wall
+          out at ~20-40 units, so add a second, wider-throw fill light aimed
+          down the range. */}
+      {module === "projectiles" && (
+        <pointLight position={[16, 18, 10]} intensity={1.4} color="#ffcbb0" distance={90} decay={1.6} />
+      )}
 
       <Suspense fallback={null}>
         <Environment preset="night" background={false} environmentIntensity={0.25} />
