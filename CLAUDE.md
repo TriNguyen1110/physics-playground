@@ -18,6 +18,46 @@ Demo grade, not production. Working beats complete, and shipped beats correct in
 Scope is fixed and the clock is not. When in doubt, cut. See CONTRACT.md's fallback table and
 cut order. Never cut: the three `step()` modules being physically correct and interactive.
 
+## North star: a museum exhibit, not a physics worksheet
+
+Every module is judged on three things, in this order. A module that's 2/3 is not done.
+
+1. **Correct.** The numbers are real physics, checked against a closed-form answer (verifier's
+   DATA scope), not just "looks plausible." This is non-negotiable and comes first because the
+   other two don't matter if the simulation is lying.
+2. **Interactive and fun.** A slider isn't a form field, it's a knob you want to keep touching.
+   Response has to feel instant (drive `step()` every frame via `useFrame`, never on React
+   state re-render lag), ranges have to be wide enough to produce visibly different, sometimes
+   surprising outcomes, and there should be an obvious "aha" — the exact moment a projectile
+   clears the wall, a light ray hits total internal reflection, two charges snap together.
+3. **Beautiful.** Think hands-on science museum exhibit (Exploratorium, not a textbook diagram):
+   real lighting (drei `Environment`/soft shadows), a coherent color palette per module, motion
+   that eases instead of teleporting, and a clean "museum placard" readout panel — not raw JSON
+   numbers dumped on screen. Beauty is `scene`'s job and it is real scope, not polish to skip if
+   short on time — but it never trades off against #1 or #2. A gorgeous scene with wrong physics
+   fails; correct-but-ugly ships before beautiful-but-wrong does.
+
+Concretely for `scene`: soft/physically-based lighting on every module (not flat ambient-only),
+a distinct color identity per module (e.g. warm amber for light/optics, cool blue for fields,
+neutral for projectiles), smooth camera framing (no jump cuts switching modules), and readouts
+styled as a small overlay card with units, not a `<pre>` dump.
+
+## The actual clock
+
+Hacking runs **10:00 AM–1:00 PM, 1:45–6:00 PM**, submissions due **6:00 PM sharp**, demo slot is
+2 minutes. Work backward from that, not forward from "how much can we fit":
+
+- By ~1:00 PM (lunch): all three `step()` functions correct and unit-tested (DATA scope clear).
+  If a module isn't there by lunch, it's the first thing cut, not projectiles/fields/light
+  picked arbitrarily — cut whichever module's physics is least solid.
+- By ~4:00 PM: all three modules interactive and rendered (SCREEN scope clear) — this is the
+  minimum demoable product. Sponsor API integrations (World Labs backdrop, Tripo assets, mint.gg
+  publish) only start after this bar is met, never before it.
+- 4:00–5:30 PM: beauty pass (lighting, palette, readout styling) and sponsor integrations, in
+  that order, per CONTRACT.md's cut order if time is short.
+- 5:30–6:00 PM: freeze. No new commits after 5:30 except a fix for something that broke the demo
+  path. Rehearse the 2-minute walkthrough at least once before 6:00.
+
 ## Stack
 
 - Next.js (App Router, TypeScript, Tailwind) — already scaffolded.

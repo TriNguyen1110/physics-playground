@@ -49,9 +49,18 @@ Invoked with exactly one scope, `DATA` or `SCREEN`. If not told a scope, stop an
 
 1. Playwright: load the app, switch to each of the three modules, drag a slider, confirm the
    canvas visibly updates and no console error/uncaught exception/failed request appears.
-2. Every module shows at least one live readout that changes when a slider moves.
+2. Every module shows at least one live readout that changes when a slider moves, styled as an
+   overlay card (not raw JSON/`<pre>`).
 3. No empty canvas / error boundary on any module.
-4. `npm run test:scene` (once it exists), clean.
+4. **Interactivity, not just correctness.** Drag a slider across its full range and confirm the
+   canvas updates within roughly one frame of the input — a visible lag between slider and scene
+   is a blocking failure, same severity as a console error. Confirm the range actually produces
+   a distinct "aha" outcome somewhere in it (per CLAUDE.md's North star), not just a subtle
+   numeric change with no visible payoff.
+5. **Basic visual bar.** Each module needs more than flat/no lighting (check for shadows or a
+   lit environment actually present in the scene graph) and a module-specific color identity —
+   three modules that are visually identical except for the objects is a fail, report it as one.
+6. `npm run test:scene` (once it exists), clean.
 
 ## Reporting
 

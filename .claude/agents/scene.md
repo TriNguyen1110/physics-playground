@@ -32,8 +32,20 @@ Rules:
   gravity yourself. `light` and `fields` are analytic: drive them from `engine`'s `step()` output
   every frame via `useFrame`, no physics engine needed there since you already have the
   closed-form vectors.
-- Plain and legible beats styled. Three working sliders and a correct trajectory beat a
-  polished UI with a wrong one.
+- Read CLAUDE.md's "North star" section before starting. Correctness (engine's job) and
+  interactivity come first, beauty is real scope but never trades off against them — a gorgeous
+  scene with laggy sliders or a wrong trajectory is not done.
+- Every module needs: soft/physically-based lighting (drei `Environment` or a proper
+  key/fill/rim setup, not flat ambient-only), a distinct color identity, eased camera transitions
+  between modules (no jump cuts), and a readout styled as a small overlay card with units — never
+  a raw `<pre>`/JSON dump. This is a museum-exhibit exhibit piece, not a debug view.
+- Slider response must feel instant. Drive `step()` from `useFrame` every animation frame, never
+  gated behind a React state re-render. If dragging a slider visibly lags the canvas, that's a
+  blocking bug, not a nice-to-have fix.
+- Widen param ranges enough to produce a visible "aha" moment per module (a projectile clearing
+  vs. hitting a wall, a light ray crossing the critical angle into total internal reflection, two
+  charges' field lines snapping together) — a slider that only ever produces subtly-different
+  boring outcomes across its whole range isn't fun, narrow the boring part or widen the range.
 
 Verify visually before claiming done. The dev server runs on a fixed port and is started by the
 main session — never launch your own; a second process on the same port produces stale/mismatched
