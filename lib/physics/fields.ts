@@ -113,6 +113,17 @@ export function step(params: ScenarioParams, t: number): ScenarioState {
   // Lorentz force; no new physical law, just a division.
   const acceleration = lorentzForce.clone().divideScalar(testMass)
 
+  // Signed scalar readout: the Lorentz force's X-component. `.length()` (magnitude) is
+  // mathematically EVEN in test_charge's sign for any vector V (|(-c)*V| == |c*V|), so flipping
+  // test_charge from -5 to +5 can never change a magnitude-based readout even though the force
+  // direction genuinely reverses — that's real physics (F=qE flips with q's sign) with no
+  // observable readout. X is the axis both source charges (charge1/charge2) sit on and where the
+  // net field/v x B combination is dominant at this module's defaults (charge3 defaults to 0, so
+  // Z stays 0 unless charge3 is moved off zero) — the most physically meaningful single signed
+  // component to expose given this file's vector layout, without inventing a second hand-rolled
+  // formula (it's just lorentzForce.x, already computed above via THREE.Vector3 addition).
+  const lorentzForceSignedX = lorentzForce.x
+
   const objects: SceneObject[] = [
     {
       id: "charge-1",
@@ -150,6 +161,7 @@ export function step(params: ScenarioParams, t: number): ScenarioState {
         charge: testCharge,
         mass_kg: testMass,
         lorentz_force: [lorentzForce.x, lorentzForce.y, lorentzForce.z],
+        lorentz_force_signed_x: lorentzForceSignedX,
         acceleration: [acceleration.x, acceleration.y, acceleration.z],
       },
     },
@@ -170,6 +182,12 @@ export function step(params: ScenarioParams, t: number): ScenarioState {
     { label: "Coulomb force (1 on 2)", value: `${coulombForceMag.toFixed(3)} N` },
     { label: "net E-field at test particle", value: `${eTotal.length().toFixed(3)} N/C` },
     { label: "Lorentz force on test particle", value: `${lorentzForce.length().toFixed(3)} N` },
+    // Signed readout — magnitude above is even in test_charge's sign (|-c|==|c|) and can never
+    // show that flipping the test particle's charge sign reverses the force direction; this
+    // exposes the raw signed X-component (the axis charge1/charge2 sit on and where the
+    // net-field/v x B vector is dominant at defaults) so that real, physical sign flip is
+    // actually visible in a readout.
+    { label: "Lorentz force (signed, x-axis)", value: `${lorentzForceSignedX.toFixed(3)} N` },
     { label: "test particle mass", value: `${testMass.toFixed(2)} kg` },
     { label: "acceleration (F/m)", value: `${acceleration.length().toFixed(3)} m/s^2` },
   ]
