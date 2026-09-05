@@ -3,11 +3,130 @@
 import { memo, useMemo, useRef, useState, type MutableRefObject } from "react"
 import { useFrame } from "@react-three/fiber"
 import * as THREE from "three"
+import { TransformControls } from "@react-three/drei"
 import { BallCollider, CuboidCollider, Physics, RigidBody, type RapierRigidBody } from "@react-three/rapier"
 import { ObjectRenderer } from "@/components/ObjectRenderer"
 import { PALETTE } from "@/components/palette"
 import { step as projectilesStep } from "@/lib/physics/projectiles"
 import type { ScenarioParams, ScenarioState } from "@/lib/physics/types"
+
+// --- CRUD stage 2 (crud-projectiles-01) -------------------------------------------------------
+// Follows the pattern established in FieldsScene (crud-fields-01, commit deea424): drei's
+// `TransformControls`, `onObjectChange` reading the dragged Object3D's live position and writing
+// back into a real value, position given as a DIRECT prop on `<TransformControls>` itself (never
+// relying on it being inherited from a `children` group — that collapses every gizmo onto world
+// origin, a bug already shipped once in the fields tick).
+//
+// Three different honesty tiers here, same bar as crud-fields-01's test-particle finding:
+//  1. Primary wall (wall_distance/wall_height): REAL ScenarioParams already read by this file.
+//     Drag round-trips through paramsRef exactly like the sliders do — physics stays
+//     authoritative, a drag and a slider drag are indistinguishable to the render.
+//  2. Second wall / ramp / platform: hardcoded set-piece constants with NO backing ScenarioParams
+//     (added in the layout-cleanup tick, and types.ts is out of scope this tick per file
+//     restrictions). These get local `useState` position — genuinely draggable and their real
+//     Rapier colliders follow (RigidBody position prop, not a visual-only offset), but it is
+//     SCENE-LOCAL: a reload or a second Convex-synced client will not see the moved position.
+//     Constrained to X/Z only so a drag can't undo the ramp/platform's own ground-contact Y math.
+//  3. Launch point/spring: NOT draggable. `lib/physics/projectiles.ts`'s `launchPosition` is
+//     hardcoded to `(0, 0.05, 0)` (line ~92) with no param feeding X/Z at all — same category as
+//     fields' test-particle. Faking a free-drag handle on it would be decoration with nothing
+//     behind it, so it deliberately has none.
+//
+// Drag handles are rendered as thin wireframe boxes (not the solid ObjectRenderer mesh) so
+// dragging never produces two overlapping solid meshes — the REAL solid wall/obstacle mesh is
+// still the one rendered by its own RigidBody below, driven by the same params/state this handle
+// writes into, and it visibly follows within a frame since this file already re-renders every
+// frame (the `setInitial` useFrame below).
+function attachedObjectFrom(e: unknown): THREE.Object3D | undefined {
+  const target = (e as { target?: { object?: THREE.Object3D } } | undefined)?.target
+  return target?.object
+}
+
+const WALL_DISTANCE_MIN = 2
+const WALL_DISTANCE_MAX = 40
+const WALL_HEIGHT_MIN = 0
+const WALL_HEIGHT_MAX = 10
+
+// No backing params for these three, so the clamp ranges are just "keep it on the sensible part
+// of the ground plane" (GROUND_HALF_EXTENT is 200, but a drag that far out would be pointless).
+const OBSTACLE_X_MIN = 0
+const OBSTACLE_X_MAX = 60
+const OBSTACLE_Z_MIN = -20
+const OBSTACLE_Z_MAX = 20
+
+// Wall drag handle: translate-only on X/Y (matches the two real params it writes into), Z locked
+// since the wall's real Z-extent/position isn't slider-driven at all. Y is the wall's CENTER
+// (matches the RigidBody's own `position={[wallDistance, wallHeight / 2, 0]}` below), so dragging
+// it maps back to wall_height via *2 — dragging the handle up doubles the wall's height, which
+// reads naturally since the handle sits at the wall's visual midpoint.
+function WallDragHandle({
+  wallDistance,
+  wallHeight,
+  paramsRef,
+}: {
+  wallDistance: number
+  wallHeight: number
+  paramsRef: MutableRefObject<ScenarioParams>
+}) {
+  return (
+    <TransformControls
+      position={[wallDistance, wallHeight / 2, 0]}
+      mode="translate"
+      showX
+      showY
+      showZ={false}
+      onObjectChange={(e) => {
+        const obj = attachedObjectFrom(e)
+        if (!obj) return
+        const nextDistance = THREE.MathUtils.clamp(obj.position.x, WALL_DISTANCE_MIN, WALL_DISTANCE_MAX)
+        const nextHeight = THREE.MathUtils.clamp(obj.position.y * 2, WALL_HEIGHT_MIN, WALL_HEIGHT_MAX)
+        paramsRef.current = { ...paramsRef.current, wall_distance: nextDistance, wall_height: nextHeight }
+      }}
+    >
+      <mesh>
+        <boxGeometry args={[0.5, Math.max(wallHeight, 0.4), 8.4]} />
+        <meshStandardMaterial color={PALETTE.maroon} wireframe transparent opacity={0.35} depthTest={false} />
+      </mesh>
+    </TransformControls>
+  )
+}
+
+// Shared drag handle for the three scene-local (no-ScenarioParams) obstacles — X/Z translate
+// only, Y fixed, so a drag can't lift them off their own already-correct ground-contact Y.
+function ObstacleDragHandle({
+  position,
+  size,
+  color,
+  onDrag,
+}: {
+  position: [number, number, number]
+  size: [number, number, number]
+  color: string
+  onDrag: (x: number, z: number) => void
+}) {
+  return (
+    <TransformControls
+      position={position}
+      mode="translate"
+      showX
+      showY={false}
+      showZ
+      onObjectChange={(e) => {
+        const obj = attachedObjectFrom(e)
+        if (!obj) return
+        onDrag(
+          THREE.MathUtils.clamp(obj.position.x, OBSTACLE_X_MIN, OBSTACLE_X_MAX),
+          THREE.MathUtils.clamp(obj.position.z, OBSTACLE_Z_MIN, OBSTACLE_Z_MAX)
+        )
+      }}
+    >
+      <mesh>
+        <boxGeometry args={size} />
+        <meshStandardMaterial color={color} wireframe transparent opacity={0.35} depthTest={false} />
+      </mesh>
+    </TransformControls>
+  )
+}
 
 // Ground + walls are scene-owned set pieces, not part of engine's step() —
 // engine's projectiles.step() only returns the launch object + closed-form
@@ -157,6 +276,12 @@ export const ProjectilesScene = memo(function ProjectilesScene({
   // exist; that's `balls` below.
   const [launchId, setLaunchId] = useState(0)
   const [balls, setBalls] = useState<FlyingBall[]>([])
+  // CRUD stage 2, local/scene-only state (see file-header note): wall2/ramp/platform have no
+  // backing ScenarioParams, so their dragged position lives here instead of paramsRef. {x, z}
+  // only — Y stays derived from the same ground-contact math as before.
+  const [wall2XZ, setWall2XZ] = useState<{ x: number; z: number }>({ x: WALL2_DISTANCE_M, z: 0 })
+  const [rampXZ, setRampXZ] = useState<{ x: number; z: number }>({ x: RAMP_DISTANCE_M, z: 0 })
+  const [platformXZ, setPlatformXZ] = useState<{ x: number; z: number }>({ x: PLATFORM_DISTANCE_M, z: 0 })
   const bodyRefs = useRef<Map<number, RapierRigidBody>>(new Map())
   const nextBallId = useRef(0)
   const frameCount = useRef(0)
@@ -354,6 +479,11 @@ export const ProjectilesScene = memo(function ProjectilesScene({
         />
       </RigidBody>
 
+      {/* CRUD stage 2: drag handle for the primary wall, always rendered (even at
+          wall_height=0) so the wall can be dragged back up from nothing. Writes straight into
+          paramsRef.current — see WallDragHandle above. */}
+      <WallDragHandle wallDistance={wallDistance} wallHeight={wallHeight} paramsRef={paramsRef} />
+
       {wallHeight > 0 && (
         <RigidBody
           key={`wall-${launchId}`}
@@ -382,8 +512,16 @@ export const ProjectilesScene = memo(function ProjectilesScene({
           further downrange, tinted cyan (this module's secondary accent) so
           it reads as visually distinct from the primary maroon wall — a
           fast enough shot that clears wall 1 now has a second thing to
-          clear or hit, instead of open field after the first wall. */}
-      <RigidBody type="fixed" colliders={false} position={[WALL2_DISTANCE_M, WALL2_HEIGHT_M / 2, 0]}>
+          clear or hit, instead of open field after the first wall.
+          CRUD stage 2: position is now local `wall2XZ` state (see file header) instead of the
+          WALL2_DISTANCE_M constant directly, draggable via the handle below on X/Z. */}
+      <ObstacleDragHandle
+        position={[wall2XZ.x, WALL2_HEIGHT_M / 2, wall2XZ.z]}
+        size={[0.6, WALL2_HEIGHT_M, 8.4]}
+        color={PALETTE.cyan}
+        onDrag={(x, z) => setWall2XZ({ x, z })}
+      />
+      <RigidBody type="fixed" colliders={false} position={[wall2XZ.x, WALL2_HEIGHT_M / 2, wall2XZ.z]}>
         <CuboidCollider args={[0.2, WALL2_HEIGHT_M / 2, 4]} restitution={0.55} friction={0.4} />
         <ObjectRenderer
           object={{
@@ -411,16 +549,30 @@ export const ProjectilesScene = memo(function ProjectilesScene({
           rectangle) — anchoring the center at GROUND_SURFACE_Y plus that
           offset puts the ramp's downhill edge exactly on the ground, same
           "sits on the ground plane" bar as every other ground-relative
-          object here, just accounting for the rotation. */}
+          object here, just accounting for the rotation.
+          CRUD stage 2: X/Z now come from local `rampXZ` state instead of the RAMP_DISTANCE_M
+          constant directly (Y stays derived from the same tilt math, untouched by the drag). */}
+      <ObstacleDragHandle
+        position={[
+          rampXZ.x,
+          GROUND_SURFACE_Y +
+            (RAMP_SIZE[0] / 2) * Math.sin(THREE.MathUtils.degToRad(RAMP_TILT_DEG)) +
+            (RAMP_SIZE[1] / 2) * Math.cos(THREE.MathUtils.degToRad(RAMP_TILT_DEG)),
+          rampXZ.z,
+        ]}
+        size={RAMP_SIZE}
+        color={PALETTE.white}
+        onDrag={(x, z) => setRampXZ({ x, z })}
+      />
       <RigidBody
         type="fixed"
         colliders={false}
         position={[
-          RAMP_DISTANCE_M,
+          rampXZ.x,
           GROUND_SURFACE_Y +
             (RAMP_SIZE[0] / 2) * Math.sin(THREE.MathUtils.degToRad(RAMP_TILT_DEG)) +
             (RAMP_SIZE[1] / 2) * Math.cos(THREE.MathUtils.degToRad(RAMP_TILT_DEG)),
-          0,
+          rampXZ.z,
         ]}
         rotation={[0, 0, THREE.MathUtils.degToRad(RAMP_TILT_DEG)]}
       >
@@ -453,11 +605,20 @@ export const ProjectilesScene = memo(function ProjectilesScene({
           before), and a purely cosmetic support pillar (no collider — does
           not touch the collision/Rapier setup) fills the gap down to the
           ground so the platform reads as a structure standing on the
-          ground plane instead of a disconnected floating slab. */}
+          ground plane instead of a disconnected floating slab.
+          CRUD stage 2: X/Z now come from local `platformXZ` state instead of the
+          PLATFORM_DISTANCE_M constant directly; Y untouched by the drag. The cosmetic pillar
+          below is repositioned to match so it doesn't visibly detach from the platform. */}
+      <ObstacleDragHandle
+        position={[platformXZ.x, GROUND_SURFACE_Y + PLATFORM_HEIGHT_M - PLATFORM_SIZE[1] / 2, platformXZ.z]}
+        size={PLATFORM_SIZE}
+        color={PALETTE.cyan}
+        onDrag={(x, z) => setPlatformXZ({ x, z })}
+      />
       <RigidBody
         type="fixed"
         colliders={false}
-        position={[PLATFORM_DISTANCE_M, GROUND_SURFACE_Y + PLATFORM_HEIGHT_M - PLATFORM_SIZE[1] / 2, 0]}
+        position={[platformXZ.x, GROUND_SURFACE_Y + PLATFORM_HEIGHT_M - PLATFORM_SIZE[1] / 2, platformXZ.z]}
       >
         <CuboidCollider
           args={[PLATFORM_SIZE[0] / 2, PLATFORM_SIZE[1] / 2, PLATFORM_SIZE[2] / 2]}
@@ -478,9 +639,9 @@ export const ProjectilesScene = memo(function ProjectilesScene({
           purely visual ground connection, see bug-fix note above. */}
       <mesh
         position={[
-          PLATFORM_DISTANCE_M,
+          platformXZ.x,
           GROUND_SURFACE_Y + (PLATFORM_HEIGHT_M - PLATFORM_SIZE[1]) / 2,
-          0,
+          platformXZ.z,
         ]}
         receiveShadow
         castShadow
