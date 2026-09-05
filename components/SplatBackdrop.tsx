@@ -18,21 +18,14 @@ declare module "@react-three/fiber" {
   }
 }
 
-// PLACEHOLDER WORLD, flagged deliberately: this is operation
-// babfd53b-754a-44b6-9468-d25d579609ce, a warm/golden museum hall generated
-// BEFORE the palette (maroon/toned-cyan/silver/black/white) was locked. A
-// re-generation matching the palette ("dark moody science museum hall,
-// near-black void with deep maroon and muted teal-cyan accent lighting,
-// brushed silver/steel fixtures") was kicked off as operation
-// 6eba91ef-08aa-4d90-b62b-20a2eaadcbd1 but was still IN_PROGRESS after
-// ~8 minutes of polling (typical ~5min generation time exceeded) at the end
-// of this tick — swap SPLAT_URL below to that operation's spz_urls["100k"]
-// (GET /marble/v1/operations/6eba91ef-08aa-4d90-b62b-20a2eaadcbd1) the
-// moment it reports done:true. This URL only proves the Spark/R3F
-// integration renders a real Marble splat inside the shared Canvas; it is
-// NOT the final palette-matched backdrop.
+// Palette-matched world (operation 6eba91ef-08aa-4d90-b62b-20a2eaadcbd1,
+// world_id 20d3ab6e-b3f7-4e0a-8b34-9991f605d40d): "dark moody science museum
+// hall, near-black void with deep maroon and muted teal-cyan accent
+// lighting, brushed silver/steel fixtures" — matches the locked palette
+// (maroon/toned-cyan/silver/black/white), replacing the earlier warm/golden
+// placeholder world this file originally shipped with.
 export const SPLAT_URL =
-  "https://cdn.marble.worldlabs.ai/d9f02382-d3a2-437e-a0e9-4823bcc93538/ff305adf-71d6-4b78-ab5a-c388c02802ee_dust_100k.spz"
+  "https://cdn.marble.worldlabs.ai/20d3ab6e-b3f7-4e0a-8b34-9991f605d40d/82a47add-d2be-42c1-b597-0489d2e1fcf7_dust_100k.spz"
 
 // Marble's own reported semantics for this world (from the generation
 // operation's response.assets.splats.semantics_metadata): metric_scale_factor
