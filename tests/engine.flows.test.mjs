@@ -409,6 +409,194 @@ test("light: Cauchy dispersion n2(lambda)=A+B/lambda^2 is calibrated so n2_eff(5
   assert.ok(Math.abs(refraction450 - refraction650) > 1e-3, "refraction angle should measurably differ 450nm vs 650nm")
 })
 
+// ---------------------------------------------------------------------------
+// engine-07: element_type (light) — slab regression + prism + convex/concave lens
+// ---------------------------------------------------------------------------
+
+test("light: element_type omitted vs element_type=0 are byte-identical to the slab default", () => {
+  const params = { angle_deg: 30, n1: 1.5, n2: 1.0 }
+  const stateOmitted = lightStep(params, 0)
+  const stateExplicit0 = lightStep({ ...params, element_type: 0 }, 0)
+  assert.deepEqual(stateOmitted, stateExplicit0)
+  assertStateIsClean(stateOmitted, "light@element_type-omitted")
+})
+
+test("light: prism deviation delta=theta1+theta4-A matches an independent r1/r2/theta4 Snell chain", () => {
+  const cases = [
+    { A: 55, n1: 1.0, n2: 1.6, theta1Deg: 35 },
+    { A: 60, n1: 1.0, n2: 1.5, theta1Deg: 40 },
+    { A: 45, n1: 1.0, n2: 1.4, theta1Deg: 20 },
+  ]
+  for (const { A, n1, n2, theta1Deg } of cases) {
+    const theta1 = theta1Deg * DEG
+    const Arad = A * DEG
+    const sinR1 = (n1 / n2) * Math.sin(theta1)
+    const r1 = Math.asin(sinR1)
+    const r2 = Arad - r1
+    const sinTheta4 = (n2 / n1) * Math.sin(r2)
+    assert.ok(Math.abs(sinTheta4) <= 1, `case A=${A},n2=${n2},theta1=${theta1Deg} unexpectedly hits TIR`)
+    const theta4 = Math.asin(sinTheta4)
+    const expectedDeltaDeg = theta1Deg + theta4 / DEG - A
+
+    const state = lightStep({ element_type: 1, angle_deg: theta1Deg, n1, n2, apex_angle_deg: A }, 0)
+    const devReadout = state.readouts.find((r) => r.label === "angular deviation")
+    const actualDelta = parseFloat(devReadout.value)
+    assert.ok(Math.abs(actualDelta - expectedDeltaDeg) < 0.02, `prism delta mismatch: expected ${expectedDeltaDeg}, got ${actualDelta}`)
+    assertStateIsClean(state, `light-prism(A=${A},n2=${n2},theta1=${theta1Deg})`)
+  }
+})
+
+test("light: convex lens focal length matches the lensmaker's equation and a parallel ray crosses the axis at x=f", () => {
+  const R1 = 0.4
+  const R2 = -0.6
+  const n = 1.7
+  const rayHeight = 0.3
+  const invF = (n - 1) * (1 / R1 - 1 / R2)
+  const f = 1 / invF
+
+  const state = lightStep({ element_type: 2, R1_m: R1, R2_m: R2, n2: n, ray_height_m: rayHeight }, 0)
+  const focalReadout = state.readouts.find((r) => r.label === "focal length (f)")
+  assert.ok(Math.abs(parseFloat(focalReadout.value) - f) < 1e-4)
+
+  const refracted = state.objects.find((o) => o.id === "refracted-ray")
+  const [ox, oy] = refracted.position
+  const [dx, dy] = refracted.velocity
+  const crossX = ox + dx * (-oy / dy)
+  assert.ok(Math.abs(crossX - f) < 1e-6, `convex lens crossing mismatch: expected x=${f}, got ${crossX}`)
+  assertStateIsClean(state, "light-convex-lens")
+})
+
+test("light: concave lens focal length is negative and the ray's backward extension crosses the axis at x=f (virtual focus)", () => {
+  const R1 = -0.3
+  const R2 = 0.7
+  const n = 1.5
+  const rayHeight = 0.4
+  const invF = (n - 1) * (1 / R1 - 1 / R2)
+  const f = 1 / invF
+
+  const state = lightStep({ element_type: 3, R1_m: R1, R2_m: R2, n2: n, ray_height_m: rayHeight }, 0)
+  const focalReadout = state.readouts.find((r) => r.label === "focal length (f)")
+  assert.ok(f < 0, "concave lens should have negative focal length")
+  assert.ok(Math.abs(parseFloat(focalReadout.value) - f) < 1e-4)
+
+  const refracted = state.objects.find((o) => o.id === "refracted-ray")
+  const [ox, oy] = refracted.position
+  const [dx, dy] = refracted.velocity
+  const crossX = ox + dx * (-oy / dy)
+  assert.ok(Math.abs(crossX - f) < 1e-6, `concave lens crossing mismatch: expected x=${f}, got ${crossX}`)
+  assertStateIsClean(state, "light-concave-lens")
+})
+
+// ---------------------------------------------------------------------------
+// engine-08: source_type (fields) — point_charges regression + solenoid/capacitor/bar-magnet
+// ---------------------------------------------------------------------------
+
+test("fields: source_type omitted vs source_type=0 are byte-identical to the point-charges default", () => {
+  const params = { charge1: 3, charge2: -3, separation: 4, test_velocity: 5, b_field: 1.5, test_charge: 1 }
+  const stateOmitted = fieldsStep(params, 0)
+  const stateExplicit0 = fieldsStep({ ...params, source_type: 0 }, 0)
+  assert.deepEqual(stateOmitted, stateExplicit0)
+  assertStateIsClean(stateOmitted, "fields@source_type-omitted")
+})
+
+test("fields: solenoid B = mu0*n*I for independent (n,I) combos", () => {
+  const MU0 = 4 * Math.PI * 1e-7
+  for (const [n, I] of [[800, 3.5], [500, 2], [1000, -4]]) {
+    const expectedB = MU0 * n * I
+    const state = fieldsStep({ source_type: 1, solenoid_turns_per_m: n, solenoid_current_a: I, test_velocity: 0 }, 0)
+    const fv = state.fieldVectors[0]
+    assert.ok(Math.abs(fv.magnitude - Math.abs(expectedB)) < 1e-15 * Math.max(1, Math.abs(expectedB)) + 1e-20, `solenoid B mismatch n=${n} I=${I}`)
+    const readout = state.readouts.find((r) => r.label === "B field (mu0*n*I)")
+    // readout string is toExponential(4) (5 significant figures), so allow for that rounding.
+    assert.ok(Math.abs(parseFloat(readout.value) - expectedB) / Math.max(Math.abs(expectedB), 1e-30) < 1e-4)
+    assertStateIsClean(state, `fields-solenoid(n=${n},I=${I})`)
+  }
+})
+
+test("fields: capacitor E = V/d for independent (V,d) combos", () => {
+  for (const [V, d] of [[250, 0.04], [100, 0.1], [-500, 0.2]]) {
+    const expectedE = V / d
+    const state = fieldsStep({ source_type: 2, capacitor_voltage_v: V, capacitor_separation_m: d, test_velocity: 0 }, 0)
+    const readout = state.readouts.find((r) => r.label === "E field (V/d)")
+    assert.ok(Math.abs(parseFloat(readout.value) - expectedE) < 1e-6, `capacitor E mismatch V=${V} d=${d}`)
+    const fv = state.fieldVectors[0]
+    assert.ok(Math.abs(fv.magnitude - Math.abs(expectedE)) < 1e-9)
+    assertStateIsClean(state, `fields-capacitor(V=${V},d=${d})`)
+  }
+})
+
+test("fields: bar magnet on-axis vs equatorial field ratio is exactly 2.0 (hard dipole constraint)", () => {
+  const MU0 = 4 * Math.PI * 1e-7
+  for (const [m, r] of [[7, 2.5], [10, 3], [25, 5], [-8, 2]]) {
+    const stateOnAxis = fieldsStep({ source_type: 3, magnet_moment: m, magnet_distance_m: r, magnet_angle_deg: 0, test_velocity: 0 }, 0)
+    const stateEquatorial = fieldsStep({ source_type: 3, magnet_moment: m, magnet_distance_m: r, magnet_angle_deg: 90, test_velocity: 0 }, 0)
+    const bOnAxis = stateOnAxis.fieldVectors[0].magnitude
+    const bEquatorial = stateEquatorial.fieldVectors[0].magnitude
+
+    const expectedOnAxis = Math.abs((MU0 / (4 * Math.PI)) * (2 * m) / r ** 3)
+    const expectedEquatorial = Math.abs((MU0 / (4 * Math.PI)) * m / r ** 3)
+    assert.ok(Math.abs(bOnAxis - expectedOnAxis) < 1e-15 * Math.max(1, expectedOnAxis) + 1e-20)
+    assert.ok(Math.abs(bEquatorial - expectedEquatorial) < 1e-15 * Math.max(1, expectedEquatorial) + 1e-20)
+
+    const ratio = bOnAxis / bEquatorial
+    assert.ok(Math.abs(ratio - 2.0) < 1e-9, `bar magnet ratio should be exactly 2.0, got ${ratio}`)
+    assertStateIsClean(stateOnAxis, `fields-barmagnet-onaxis(m=${m},r=${r})`)
+    assertStateIsClean(stateEquatorial, `fields-barmagnet-equatorial(m=${m},r=${r})`)
+  }
+})
+
+// ---------------------------------------------------------------------------
+// engine-09: projectiles — spring launcher + full 3D azimuth direction
+// ---------------------------------------------------------------------------
+
+test("projectiles: manual mode / azimuth=0 is byte-identical to the pre-existing engine-04 formulas", () => {
+  const angleDeg = 37
+  const speed = 22
+  const g = 9.81
+  const angleRad = angleDeg * DEG
+  const expectedApex = (speed * Math.sin(angleRad)) ** 2 / (2 * g)
+  const expectedRange = (speed * speed * Math.sin(2 * angleRad)) / g
+  const expectedTof = (2 * speed * Math.sin(angleRad)) / g
+  const expectedVel = [speed * Math.cos(angleRad), speed * Math.sin(angleRad), 0]
+
+  const state = projectilesStep({ angle_deg: angleDeg, speed, gravity: g }, 0)
+  const proj = state.objects.find((o) => o.id === "projectile")
+  assert.ok(Math.abs(proj.meta.apex_height_m - expectedApex) < 1e-9)
+  assert.ok(Math.abs(proj.meta.range_m - expectedRange) < 1e-9)
+  assert.ok(Math.abs(proj.meta.time_of_flight_s - expectedTof) < 1e-9)
+  for (let i = 0; i < 3; i++) assert.ok(Math.abs(proj.velocity[i] - expectedVel[i]) < 1e-9)
+  assert.equal(proj.velocity[2], 0, "z velocity must be exactly 0 at azimuth=0")
+  assertStateIsClean(state, "projectiles-azimuth0-regression")
+})
+
+test("projectiles: spring launch speed v=sqrt(k*x^2/m) for independent (k,x,mass) combos", () => {
+  for (const [k, x, mass] of [[850, 0.45, 3.2], [200, 0.3, 1], [2000, 2, 50]]) {
+    const expectedV = Math.sqrt((k * x * x) / mass)
+    const state = projectilesStep({ launch_mode: 1, spring_k: k, spring_compression_m: x, mass_kg: mass, angle_deg: 45 }, 0)
+    const proj = state.objects.find((o) => o.id === "projectile")
+    assert.ok(Math.abs(proj.meta.speed - expectedV) < 1e-9, `spring speed mismatch k=${k} x=${x} mass=${mass}`)
+    assertStateIsClean(state, `projectiles-spring(k=${k},x=${x},mass=${mass})`)
+  }
+})
+
+test("projectiles: full 3D launch velocity vector matches independent elevation/azimuth trig and preserves |v|=speed", () => {
+  for (const [elevDeg, azDeg, speed] of [[25, 63, 18], [30, 120, 25], [10, 275, 40]]) {
+    const elevRad = elevDeg * DEG
+    const azRad = azDeg * DEG
+    const expectedVel = [
+      speed * Math.cos(elevRad) * Math.cos(azRad),
+      speed * Math.sin(elevRad),
+      speed * Math.cos(elevRad) * Math.sin(azRad),
+    ]
+    const state = projectilesStep({ angle_deg: elevDeg, azimuth_deg: azDeg, speed }, 0)
+    const proj = state.objects.find((o) => o.id === "projectile")
+    for (let i = 0; i < 3; i++) assert.ok(Math.abs(proj.velocity[i] - expectedVel[i]) < 1e-9, `velocity[${i}] mismatch elev=${elevDeg} az=${azDeg}`)
+    const mag = Math.sqrt(proj.velocity[0] ** 2 + proj.velocity[1] ** 2 + proj.velocity[2] ** 2)
+    assert.ok(Math.abs(mag - speed) < 1e-9, `|v| should equal speed, got ${mag}`)
+    assertStateIsClean(state, `projectiles-3d-direction(elev=${elevDeg},az=${azDeg})`)
+  }
+})
+
 test("light: Bruton wavelength-to-RGB mapping is dominant-channel-correct (450nm blue, 550nm green, 650nm red)", () => {
   const angleDeg = 30
   const n1 = 1.5
