@@ -52,7 +52,13 @@ export const MODULE_META: Record<
       // uniform B field).
       { key: "charge1", label: "Charge 1", min: -5, max: 5, step: 0.1, default: 3, unit: "q" },
       { key: "charge2", label: "Charge 2", min: -5, max: 5, step: 0.1, default: -3, unit: "q" },
-      { key: "separation", label: "Separation", min: 0.5, max: 10, step: 0.1, default: 4, unit: "m" },
+      // separation default nudged 4->5 (3rd fix in this class): at separation=4 the net
+      // E-field (7.5 N/C along +X) exactly canceled v x B (-7.5 N/C along +X) at the other
+      // defaults below, making test_charge inert — its ONLY effect is scaling that vector,
+      // so a zero vector means test_charge changes nothing across its whole range no matter
+      // what value it's set to. separation=5 makes E-field=4.8 N/C, which no longer cancels
+      // v x B, so the net vector test_charge scales is nonzero (-2.7,0,0) at rest.
+      { key: "separation", label: "Separation", min: 0.5, max: 10, step: 0.1, default: 5, unit: "m" },
       { key: "test_charge", label: "Test particle charge", min: -5, max: 5, step: 0.1, default: 1, unit: "q" },
       // Both test_velocity and b_field default nonzero so v x B is nonzero at the default
       // state no matter which slider moves alone — either one defaulting to 0 makes the
