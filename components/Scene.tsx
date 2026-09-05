@@ -3,6 +3,7 @@
 import { Suspense, type MutableRefObject } from "react"
 import { Environment, ContactShadows } from "@react-three/drei"
 import { CameraRig } from "@/components/CameraRig"
+import { SplatBackdrop } from "@/components/SplatBackdrop"
 import { LightScene } from "@/components/modules/LightScene"
 import { FieldsScene } from "@/components/modules/FieldsScene"
 import { ProjectilesScene } from "@/components/modules/ProjectilesScene"
@@ -42,8 +43,20 @@ export function Scene({
           ground/wall/ball were fogged down to near-indistinguishable-from-
           black at that distance, which was the root cause of the "empty
           canvas" bug, not a missing mesh. light/fields' cameras stay within
-          ~10 units of their content and are unaffected by raising this. */}
+          ~10 units of their content and are unaffected by raising this. The
+          same fog also does double duty on the splat backdrop below: it
+          fades the splat's own baked lighting toward the void color at
+          distance, which is what keeps a warmer-than-palette splat from
+          fighting the cold black/maroon/cyan mood up close. */}
       <fog attach="fog" args={[VOID_COLOR, 8, module === "projectiles" ? 110 : 70]} />
+
+      {/* The actual Marble/World Labs generated world, mounted once (not
+          per-module) as the room the physics objects sit inside — see
+          SplatBackdrop.tsx for the URL/scale/floor-alignment notes. This is
+          the North-star merge: previously this world only existed as an
+          external marble.worldlabs.ai link, completely disconnected from
+          the app. */}
+      <SplatBackdrop />
 
       <CameraRig module={module} />
 
