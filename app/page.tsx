@@ -6,6 +6,7 @@ import { Scene } from "@/components/Scene"
 import { ModuleSwitcher } from "@/components/ModuleSwitcher"
 import { ControlPanel } from "@/components/ControlPanel"
 import { ReadoutCard } from "@/components/ReadoutCard"
+import { SponsorCredits } from "@/components/SponsorCredits"
 import { MODULE_META, defaultParams, type ModuleId } from "@/components/modules/types"
 import type { ScenarioState } from "@/lib/physics/types"
 
@@ -39,10 +40,13 @@ export default function Home() {
 
       <div className="pointer-events-none absolute inset-0 flex flex-col justify-between p-6">
         <div className="flex items-start justify-between">
-          <div className="pointer-events-auto">
-            <h1 className="text-sm font-semibold tracking-wide text-white/70">
-              Physics Playground <span className="text-white/30">/ {meta.label}</span>
-            </h1>
+          <div className="flex flex-col items-start gap-2">
+            <div className="pointer-events-auto">
+              <h1 className="text-sm font-semibold tracking-wide text-white/70">
+                Physics Playground <span className="text-white/30">/ {meta.label}</span>
+              </h1>
+            </div>
+            <SponsorCredits />
           </div>
           <ModuleSwitcher active={module} onSelect={setModule} />
         </div>
