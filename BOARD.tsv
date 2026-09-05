@@ -1,1 +1,3 @@
 ts	kind	id	value	owner	scope	note
+H+0	item	engine-01	backlog	engine	DATA	build step() for light, projectiles, fields per CONTRACT.md + Convex schema/functions
+H+0	item	scene-01	backlog	scene	SCREEN	base R3F canvas + module switcher + per-module slider UI + readout overlay, museum-exhibit look
