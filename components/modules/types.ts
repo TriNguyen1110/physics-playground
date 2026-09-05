@@ -41,6 +41,14 @@ export const MODULE_META: Record<
       // n2/n3 — sweeping it visibly tints the ray and nudges the
       // refraction angle, like a prism.
       { key: "wavelength_nm", label: "Wavelength", min: 400, max: 700, step: 5, default: 590, unit: " nm" },
+      // engine-07: selectable optical element. Default 0 (slab) is byte-identical to the
+      // pre-existing engine-05 two-interface path — nothing below this line does anything
+      // until element_type is actually changed.
+      { key: "element_type", label: "Element (0 slab/1 prism/2 convex/3 concave)", min: 0, max: 3, step: 1, default: 0 },
+      { key: "apex_angle_deg", label: "Prism apex angle", min: 10, max: 90, step: 1, default: 60, unit: "°" },
+      { key: "R1_m", label: "Lens R1", min: -2, max: 2, step: 0.05, default: 0.5, unit: " m" },
+      { key: "R2_m", label: "Lens R2", min: -2, max: 2, step: 0.05, default: -0.5, unit: " m" },
+      { key: "ray_height_m", label: "Ray height (lens)", min: -1.5, max: 1.5, step: 0.05, default: 0.5, unit: " m" },
     ],
   },
   projectiles: {
@@ -69,6 +77,12 @@ export const MODULE_META: Record<
       { key: "drag_enabled", label: "Air drag", min: 0, max: 1, step: 1, default: 0, kind: "toggle" },
       { key: "wall_distance", label: "Wall distance", min: 2, max: 40, step: 0.5, default: 12, unit: "m" },
       { key: "wall_height", label: "Wall height", min: 0, max: 10, step: 0.25, default: 3, unit: "m" },
+      // engine-09: launch_mode default 0 (manual) + azimuth_deg default 0 are both
+      // byte-identical no-ops vs. the pre-existing engine-04 default trajectory.
+      { key: "launch_mode", label: "Launch mode (0 manual/1 spring)", min: 0, max: 1, step: 1, default: 0, kind: "toggle" },
+      { key: "spring_k", label: "Spring constant k", min: 1, max: 2000, step: 1, default: 200, unit: " N/m" },
+      { key: "spring_compression_m", label: "Spring compression", min: 0, max: 2, step: 0.05, default: 0.3, unit: " m" },
+      { key: "azimuth_deg", label: "Launch azimuth", min: 0, max: 360, step: 1, default: 0, unit: "°" },
     ],
   },
   fields: {
@@ -89,7 +103,9 @@ export const MODULE_META: Record<
       // independent source, not collinear with charge1/charge2. Default 0
       // makes it contribute exactly zero everywhere (0/r^2), so the module
       // reduces exactly to the old 2-charge behavior until moved.
-      { key: "charge3", label: "Charge 3", min: -5, max: 5, step: 0.1, default: 0, unit: "q" },
+      // charge3_offset fix (H+4.7): charge3 default nudged 0->1.5 so the offset slider is
+      // no longer inert on load — same inert-slider bug class as separation's earlier fix.
+      { key: "charge3", label: "Charge 3", min: -5, max: 5, step: 0.1, default: 1.5, unit: "q" },
       { key: "charge3_offset", label: "Charge 3 offset (+Z)", min: 0.5, max: 10, step: 0.1, default: 3, unit: "m" },
       // separation default nudged 4->5 (3rd fix in this class): at separation=4 the net
       // E-field (7.5 N/C along +X) exactly canceled v x B (-7.5 N/C along +X) at the other
@@ -106,6 +122,16 @@ export const MODULE_META: Record<
       { key: "b_field", label: "Magnetic field (+Y)", min: 0, max: 5, step: 0.1, default: 1.5, unit: "T" },
       // engine-04: F=ma readout only, no new law — acceleration = lorentz_force / test_mass_kg.
       { key: "test_mass_kg", label: "Test particle mass", min: 0.1, max: 20, step: 0.1, default: 1, unit: " kg" },
+      // engine-08: selectable field source. Default 0 (point_charges) is byte-identical to
+      // the pre-existing engine-05/06 path.
+      { key: "source_type", label: "Source (0 charges/1 coil/2 capacitor/3 magnet)", min: 0, max: 3, step: 1, default: 0 },
+      { key: "solenoid_turns_per_m", label: "Solenoid turns/m", min: 10, max: 5000, step: 10, default: 500 },
+      { key: "solenoid_current_a", label: "Solenoid current", min: -10, max: 10, step: 0.1, default: 2, unit: " A" },
+      { key: "capacitor_voltage_v", label: "Capacitor voltage", min: -1000, max: 1000, step: 5, default: 100, unit: " V" },
+      { key: "capacitor_separation_m", label: "Capacitor plate gap", min: 0.01, max: 2, step: 0.01, default: 0.1, unit: " m" },
+      { key: "magnet_moment", label: "Magnet moment", min: -50, max: 50, step: 0.5, default: 10 },
+      { key: "magnet_distance_m", label: "Magnet distance", min: 0.5, max: 10, step: 0.1, default: 3, unit: " m" },
+      { key: "magnet_angle_deg", label: "Magnet angle (0 axis/90 equatorial)", min: 0, max: 90, step: 1, default: 0, unit: "°" },
     ],
   },
 }
