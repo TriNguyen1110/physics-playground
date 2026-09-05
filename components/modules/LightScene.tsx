@@ -3,6 +3,8 @@
 import { useEffect, useMemo, useRef, type MutableRefObject } from "react"
 import * as THREE from "three"
 import { Line } from "@react-three/drei"
+import { useFrame } from "@react-three/fiber"
+import type { Line2, LineSegments2 } from "three-stdlib"
 import { ObjectRenderer } from "@/components/ObjectRenderer"
 import { PALETTE } from "@/components/palette"
 import { useLiveScenario } from "@/components/modules/useLiveScenario"
@@ -171,22 +173,123 @@ function buildLensBundle(params: ScenarioParams, t: number): SceneObject[] {
   return bundled
 }
 
-/** Same geometry as ObjectRenderer's RayObject, but with a thicker/brighter line — used to pick
- * the current slider-selected ray out of the prism/lens bundle rather than losing it in the
- * fan. Duplicated (not imported) since ObjectRenderer.tsx is out of scope for this change. */
-function HighlightRay({ object }: { object: SceneObject }) {
+// --- Sin-wave ray rendering ------------------------------------------------------------------
+// "we agree upon making the lights sin waves not straight rays already": every ray SEGMENT
+// below (incident/reflected/refracted, the rainbow fan, the lens bundle, the highlight ray) is
+// drawn as a real oscillating EM-wave shape instead of a straight `THREE.Line`, purely a
+// rendering change — none of the underlying step() angles/colors/physics above are touched.
+//
+// Real optical wavelength_nm (400-700nm = 4e-7-7e-7 m) is many orders of magnitude smaller than
+// this scene's geometry (rays run several meters), so drawing the literal wavelength is
+// impossible — instead we pick a fixed VISUAL_WAVELENGTH_SCALE_M_PER_NM that keeps the
+// physically-meaningful part (spatial frequency scales linearly, and inversely, with
+// wavelength_nm — shorter wavelength = visibly tighter oscillation) while landing at a cycle
+// count that actually reads as a wave on screen. At this scene's typical ~4m ray length:
+//   650nm (red)   -> visual wavelength 0.39m -> ~10.3 cycles
+//   450nm (blue)  -> visual wavelength 0.27m -> ~14.8 cycles
+// enough cycles to clearly show both "it's a wave" and "blue oscillates tighter than red",
+// without being so dense it looks chaotic or obscures the ray's underlying straight-line path.
+const VISUAL_WAVELENGTH_SCALE_M_PER_NM = 6e-4
+// Perpendicular displacement, modest relative to the scene's ~1-5m object scale so the wave
+// reads as a wiggle on top of the ray, not a chaotic zigzag that obscures the geometry.
+const WAVE_AMPLITUDE_M = 0.08
+// Points per ray segment — dense enough to look smooth, cheap enough that the rainbow fan (up
+// to 8 extra rays) and lens bundle (up to 7 extra rays) don't cost real frame time.
+const WAVE_POINTS_PER_SEGMENT = 28
+// Phase advance rate (rad/s), purely a "looks like it's traveling" visual rate — not tied to c
+// (that would be imperceptibly fast at this scene's scale), just fast enough to clearly read as
+// propagating along the ray direction from frame to frame.
+const WAVE_PROPAGATION_SPEED = 6
+
+/** Renders one ray SceneObject as an animated sinusoidal wave instead of a straight line: builds
+ * a dense point array offset perpendicular to the ray's own direction by
+ * amplitude*sin(2*pi*distanceAlongRay/visualWavelength - phase), phase incremented every frame
+ * via useFrame so the pattern visibly propagates along the ray. Mutates the underlying
+ * `Line2`/`LineGeometry`'s position buffer in place each frame (via three-stdlib's
+ * `LineGeometry.setPositions`) rather than driving it through React state, so animating many
+ * bundled rays at once never triggers a React re-render per frame. */
+function WaveRay({
+  object,
+  lineWidth = 2.5,
+  opacity = 0.95,
+}: {
+  object: SceneObject
+  lineWidth?: number
+  opacity?: number
+}) {
   const dir = object.velocity ?? [0, -1, 0]
   const length = (object.meta?.length as number) ?? 4
-  const points = useMemo<[Vec3, Vec3]>(() => {
-    const end: Vec3 = [
-      object.position[0] + dir[0] * length,
-      object.position[1] + dir[1] * length,
-      object.position[2] + dir[2] * length,
-    ]
-    return [object.position, end]
-  }, [object.position, dir, length])
+  const wavelengthNm = (object.meta?.wavelength_nm as number) ?? 590
 
-  return <Line points={points} color={object.color} lineWidth={5} toneMapped={false} transparent opacity={1} />
+  const lineRef = useRef<Line2 | LineSegments2 | null>(null)
+  const phaseRef = useRef(0)
+  const flat = useMemo(() => new Float32Array(WAVE_POINTS_PER_SEGMENT * 3), [])
+  const scratch = useMemo(() => new THREE.Vector3(), [])
+
+  const { origin, dirNorm, perp, visualWavelength } = useMemo(() => {
+    const d = new THREE.Vector3(dir[0], dir[1], dir[2] ?? 0)
+    if (d.lengthSq() < 1e-8) d.set(1, 0, 0)
+    d.normalize()
+    // In-plane perpendicular (rotate 90deg within XY): this scene's rays live in the XY plane
+    // (see HighlightRay's original default direction / RayObject in ObjectRenderer.tsx), so
+    // oscillating perpendicular within that same plane keeps the wave fully visible to camera
+    // instead of foreshortened along the view axis.
+    let p = new THREE.Vector3(-d.y, d.x, 0)
+    if (p.lengthSq() < 1e-8) p = new THREE.Vector3(0, 0, 1)
+    p.normalize()
+    return {
+      origin: new THREE.Vector3(object.position[0], object.position[1], object.position[2] ?? 0),
+      dirNorm: d,
+      perp: p,
+      visualWavelength: Math.max(wavelengthNm * VISUAL_WAVELENGTH_SCALE_M_PER_NM, 1e-3),
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dir[0], dir[1], dir[2], object.position[0], object.position[1], object.position[2], wavelengthNm])
+
+  const initialPoints = useMemo<Vec3[]>(() => {
+    const pts: Vec3[] = []
+    for (let i = 0; i < WAVE_POINTS_PER_SEGMENT; i++) {
+      const t = i / (WAVE_POINTS_PER_SEGMENT - 1)
+      const p = origin.clone().addScaledVector(dirNorm, t * length)
+      pts.push([p.x, p.y, p.z])
+    }
+    return pts
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [origin, dirNorm, length])
+
+  useFrame((_, delta) => {
+    phaseRef.current += delta * WAVE_PROPAGATION_SPEED
+    const phase = phaseRef.current
+    for (let i = 0; i < WAVE_POINTS_PER_SEGMENT; i++) {
+      const t = i / (WAVE_POINTS_PER_SEGMENT - 1)
+      const distAlong = t * length
+      const offset = WAVE_AMPLITUDE_M * Math.sin((2 * Math.PI * distAlong) / visualWavelength - phase)
+      scratch.copy(origin).addScaledVector(dirNorm, distAlong).addScaledVector(perp, offset)
+      flat[i * 3] = scratch.x
+      flat[i * 3 + 1] = scratch.y
+      flat[i * 3 + 2] = scratch.z
+    }
+    const geom = lineRef.current?.geometry as unknown as { setPositions?: (a: Float32Array) => void } | undefined
+    geom?.setPositions?.(flat)
+  })
+
+  return (
+    <Line
+      ref={lineRef}
+      points={initialPoints}
+      color={object.color}
+      lineWidth={lineWidth}
+      toneMapped={false}
+      transparent
+      opacity={opacity}
+    />
+  )
+}
+
+/** Same wave rendering as WaveRay, but with a thicker/brighter line — used to pick the current
+ * slider-selected ray out of the prism/lens bundle rather than losing it in the fan. */
+function HighlightRay({ object }: { object: SceneObject }) {
+  return <WaveRay object={object} lineWidth={5} opacity={1} />
 }
 
 export function LightScene({
@@ -326,12 +429,12 @@ export function LightScene({
 
   return (
     <group>
-      {renderedObjects.map((o) => (
-        <ObjectRenderer key={o.id} object={o} />
-      ))}
-      {finiteBundleObjects.map((o) => (
-        <ObjectRenderer key={o.id} object={o} />
-      ))}
+      {renderedObjects.map((o) =>
+        o.kind === "ray" ? <WaveRay key={o.id} object={o} /> : <ObjectRenderer key={o.id} object={o} />
+      )}
+      {finiteBundleObjects.map((o) =>
+        o.kind === "ray" ? <WaveRay key={o.id} object={o} /> : <ObjectRenderer key={o.id} object={o} />
+      )}
       {finiteHighlightObjects.map((o) => (
         <HighlightRay key={`highlight-${o.id}`} object={o} />
       ))}
