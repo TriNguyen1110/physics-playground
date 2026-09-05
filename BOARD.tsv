@@ -1,3 +1,14 @@
 ts	kind	id	value	owner	scope	note
 H+0	item	engine-01	backlog	engine	DATA	build step() for light, projectiles, fields per CONTRACT.md + Convex schema/functions
 H+0	item	scene-01	backlog	scene	SCREEN	base R3F canvas + module switcher + per-module slider UI + readout overlay, museum-exhibit look
+H+1.0	item	engine-01	doing	engine	DATA	building step() for light/projectiles/fields + convex schema/functions
+H+1.0	item	scene-01	doing	scene	SCREEN	claiming: base canvas + module switcher + sliders + readouts
+H+1.2	item	engine-01	review	engine	DATA	committed f31386f - light/projectiles/fields step() + convex schema/functions, self-checks pass
+H+1.2	fact	light.meta	{role, angle_deg, wavelength_nm(590), n1, n2}	engine	-	objects: interface/incident-ray/reflected-ray/refracted-ray(absent on TIR); readouts include critical_angle and TIR yes/no
+H+1.2	fact	light.params	{angle_deg:[0,89], n1:[1.0,2.5] default 1.5, n2:[1.0,2.5] default 1.0}	engine	-	ray travels n1->n2; default glass->air crosses critical angle ~41.8deg, TIR reachable by raising angle_deg
+H+1.2	fact	projectiles.meta	{role:launch, angle_deg, speed, gravity, apex_height_m, range_m, time_of_flight_s}	engine	-	step() returns ONLY launch object (pos/velocity) + closed-form readouts; scene must feed velocity into its own Rapier rigid body, step() does not integrate trajectory
+H+1.2	fact	projectiles.params	{angle_deg:[1,89] default 45, speed:[1,60] default 20, gravity:[1,20] default 9.81}	engine	-	units: m/s, m/s^2, degrees
+H+1.2	fact	fields.meta	{role:source|test-particle, charge, force_on_this:Vec3, lorentz_force:Vec3}	engine	-	objects: charge-1, charge-2, test-particle; fieldVectors: [net E at test particle, force on charge-1, force on charge-2]
+H+1.2	fact	fields.params	{charge1/charge2/test_charge:[-5,5], separation:[0.5,10] default 4, test_velocity(along +Z):[0,20], b_field(along +Y):[0,5]}	engine	-	Coulomb constant K=5 (sim-scale, not real 8.99e9) chosen for readable force magnitudes at these ranges
+H+1.2	fact	convex.generated	not yet created	engine	-	convex/_generated/* only exists after npx convex dev runs; scenarios.ts imports from ./_generated/server as standard, will typecheck once that's run
+H+1.5	fact	tools.mint	MCP server "mint" added (needs OAuth login) + mint-threejs-skills installed globally	tri	-	use for Tripo/mint.gg asset pipeline once mint MCP is authenticated
