@@ -2,11 +2,12 @@
 
 import { useEffect, useMemo, type MutableRefObject } from "react"
 import * as THREE from "three"
+import { Line } from "@react-three/drei"
 import { ObjectRenderer } from "@/components/ObjectRenderer"
 import { PALETTE } from "@/components/palette"
 import { useLiveScenario } from "@/components/modules/useLiveScenario"
 import { step as lightStep } from "@/lib/physics/light"
-import type { ScenarioParams, ScenarioState } from "@/lib/physics/types"
+import type { ScenarioParams, ScenarioState, SceneObject, Vec3 } from "@/lib/physics/types"
 
 // Rendering-space constant matching lib/physics/light.ts's SECOND_INTERFACE_GAP (1.5m below
 // interface 1 at y=0) — purely a visual placement choice, mirrors the gap the engine already
@@ -111,6 +112,64 @@ function LensShape({ converging }: { converging: boolean }) {
   )
 }
 
+// Eight samples spanning the visible spectrum (violet -> red), fed one-at-a-time into `step()`
+// with every other param held fixed, so the prism's real Cauchy dispersion (already computed
+// inside lib/physics/light.ts, just previously invisible because only one wavelength ever
+// rendered at once) shows up as an actual rainbow fan of exit rays.
+const PRISM_FAN_WAVELENGTHS_NM = [420, 450, 480, 510, 540, 570, 600, 650]
+
+// Seven parallel-ray heights spanning the ray_height_m slider's [-1.5, 1.5] range, fed
+// one-at-a-time into `step()` with every other param held fixed, so a lens's real
+// convergence/divergence (already correct paraxial math, just previously invisible with a
+// single ray) shows up as an actual bundle of parallel rays bending toward/away from one focal
+// point.
+const LENS_BUNDLE_HEIGHTS_M = [-1.4, -0.9, -0.45, 0, 0.45, 0.9, 1.4]
+
+/** Calls the pure `step()` once per wavelength sample (same angle/apex/index params, only
+ * wavelength_nm varies) and pulls out just the post-first-face rays (where real dispersion is
+ * visible) from each, uniquely re-keyed so React doesn't collide ids across samples. */
+function buildPrismFan(params: ScenarioParams, t: number): SceneObject[] {
+  const fanned: SceneObject[] = []
+  PRISM_FAN_WAVELENGTHS_NM.forEach((wavelength_nm, i) => {
+    const sample = lightStep({ ...params, wavelength_nm }, t)
+    sample.objects
+      .filter((o) => o.id === "refracted-ray" || o.id === "refracted-ray-2")
+      .forEach((o) => fanned.push({ ...o, id: `${o.id}-fan-${i}` }))
+  })
+  return fanned
+}
+
+/** Calls the pure `step()` once per ray-height sample (same lens/wavelength params, only
+ * ray_height_m varies) and pulls out the incident + bent ray from each, uniquely re-keyed. */
+function buildLensBundle(params: ScenarioParams, t: number): SceneObject[] {
+  const bundled: SceneObject[] = []
+  LENS_BUNDLE_HEIGHTS_M.forEach((ray_height_m, i) => {
+    const sample = lightStep({ ...params, ray_height_m }, t)
+    sample.objects
+      .filter((o) => o.id === "incident-ray" || o.id === "refracted-ray")
+      .forEach((o) => bundled.push({ ...o, id: `${o.id}-bundle-${i}` }))
+  })
+  return bundled
+}
+
+/** Same geometry as ObjectRenderer's RayObject, but with a thicker/brighter line — used to pick
+ * the current slider-selected ray out of the prism/lens bundle rather than losing it in the
+ * fan. Duplicated (not imported) since ObjectRenderer.tsx is out of scope for this change. */
+function HighlightRay({ object }: { object: SceneObject }) {
+  const dir = object.velocity ?? [0, -1, 0]
+  const length = (object.meta?.length as number) ?? 4
+  const points = useMemo<[Vec3, Vec3]>(() => {
+    const end: Vec3 = [
+      object.position[0] + dir[0] * length,
+      object.position[1] + dir[1] * length,
+      object.position[2] + dir[2] * length,
+    ]
+    return [object.position, end]
+  }, [object.position, dir, length])
+
+  return <Line points={points} color={object.color} lineWidth={5} toneMapped={false} transparent opacity={1} />
+}
+
 export function LightScene({
   paramsRef,
   onReadouts,
@@ -133,14 +192,49 @@ export function LightScene({
   const isPrism = role === "prism-face-1"
   const isLens = role === "convex-lens" || role === "concave-lens"
 
+  // The current slider-selected ray, pulled out of the single-call `state` so it can be drawn
+  // thicker/highlighted among the multi-ray bundle below rather than getting lost in the fan.
+  // Prism: the post-first-face rays are where dispersion is visible. Lens: the incident +
+  // bent ray at the slider's own ray_height_m.
+  const highlightObjects = isPrism
+    ? state.objects.filter((o) => o.id === "refracted-ray" || o.id === "refracted-ray-2")
+    : isLens
+      ? state.objects.filter((o) => o.id === "incident-ray" || o.id === "refracted-ray")
+      : []
+
+  // The actual "aha" effect: N extra calls to the same pure step() with only wavelength_nm (prism)
+  // or ray_height_m (lens) swept across a spread, so the real dispersion/convergence math already
+  // in lib/physics/light.ts renders as a visible rainbow fan / converging-ray bundle instead of a
+  // single ray. Recomputed only when `state` changes (useLiveScenario already gates step() calls
+  // behind an actual param change), so this stays cheap — no per-frame cost beyond what a single
+  // ray already had.
+  const bundleObjects = useMemo(() => {
+    if (isPrism) return buildPrismFan(paramsRef.current, state.t)
+    if (isLens) return buildLensBundle(paramsRef.current, state.t)
+    return []
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isPrism, isLens, state])
+
   // For prism/lens, the two flat "interface"/"interface-2" plane markers are slab-only visual
   // stand-ins; swap them out for the wedge/lens set piece instead of drawing both (avoids a
-  // flat plane floating through a wedge/lens mesh). Every other SceneObject (rays, focal-point
-  // sphere) still renders generically via ObjectRenderer, unchanged.
+  // flat plane floating through a wedge/lens mesh). The single-ray objects that the fan/bundle
+  // replaces are also dropped here (they're re-added below, once as the default-width bundle,
+  // once as the thicker highlight) so nothing double-draws. Every other SceneObject (the
+  // untouched incident/reflected ray for prism, the focal-point sphere for lens) still renders
+  // generically via ObjectRenderer, unchanged.
   const renderedObjects = (isPrism || isLens
-    ? state.objects.filter((o) => o.id !== "interface" && o.id !== "interface-2")
+    ? state.objects.filter(
+        (o) => o.id !== "interface" && o.id !== "interface-2" && !highlightObjects.includes(o)
+      )
     : state.objects
   ).filter((o) => isFiniteVec3(o.position) && isFiniteVec3(o.velocity))
+
+  const finiteBundleObjects = bundleObjects.filter(
+    (o) => isFiniteVec3(o.position) && isFiniteVec3(o.velocity)
+  )
+  const finiteHighlightObjects = highlightObjects.filter(
+    (o) => isFiniteVec3(o.position) && isFiniteVec3(o.velocity)
+  )
 
   const apexAngleDeg = (interfaceObj?.meta?.apex_angle_deg as number | undefined) ?? 60
 
@@ -148,6 +242,12 @@ export function LightScene({
     <group>
       {renderedObjects.map((o) => (
         <ObjectRenderer key={o.id} object={o} />
+      ))}
+      {finiteBundleObjects.map((o) => (
+        <ObjectRenderer key={o.id} object={o} />
+      ))}
+      {finiteHighlightObjects.map((o) => (
+        <HighlightRay key={`highlight-${o.id}`} object={o} />
       ))}
       {isPrism && <PrismWedge apexAngleDeg={apexAngleDeg} />}
       {isLens && <LensShape converging={role === "convex-lens"} />}
