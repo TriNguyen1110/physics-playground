@@ -396,6 +396,14 @@ function stepPrism(params: ScenarioParams, t: number): ScenarioState {
   let theta4Deg: number | null = null
   let deviationDeg: number | null = null
   let tirAtFace2 = false
+  // engine-11 fix: r1+r2=A is a geometric theorem that only produces a physically meaningful r2
+  // when r1 < A (the internal ray is actually converging toward face 2 in the geometry this
+  // theorem assumes). When r1 > A (e.g. steep incidence + a small apex angle), r2 = A - r1 comes
+  // out negative — that is NOT total internal reflection (a distinct phenomenon defined by
+  // sin(r2)*n2/n1 > 1), it means this specific formula's ray-path assumption doesn't hold for
+  // this incidence/index/apex combination. Track it separately so it's never silently reported
+  // as TIR.
+  let invalidGeometryFace2 = false
 
   if (!tirAtFace1) {
     const r1 = Math.asin(sinR1)
@@ -427,12 +435,16 @@ function stepPrism(params: ScenarioParams, t: number): ScenarioState {
     // internal angles (measured from each face's own normal) sum to A: r1 + r2 = A.
     const r2 = apexAngle - r1
     r2Deg = THREE.MathUtils.radToDeg(r2)
+    invalidGeometryFace2 = r2 < 0
 
-    // Snell's law at face 2, glass -> external medium: n2 sin(r2) = n1 sin(theta4).
-    const sinTheta4 = (n2 / n1) * Math.sin(r2)
-    tirAtFace2 = Math.abs(sinTheta4) > 1 || r2 < 0
+    // Snell's law at face 2, glass -> external medium: n2 sin(r2) = n1 sin(theta4). Only a
+    // meaningful check when r2 is itself geometrically valid (r2 >= 0) — feeding a negative r2
+    // into this would produce a spurious-but-in-range-or-out-of-range sinTheta4 that has no
+    // physical meaning here, so skip the Snell check entirely in the invalid-geometry regime.
+    tirAtFace2 = !invalidGeometryFace2 && Math.abs((n2 / n1) * Math.sin(r2)) > 1
 
-    if (!tirAtFace2) {
+    if (!invalidGeometryFace2 && !tirAtFace2) {
+      const sinTheta4 = (n2 / n1) * Math.sin(r2)
       const theta4 = Math.asin(sinTheta4)
       theta4Deg = THREE.MathUtils.radToDeg(theta4)
       // Total angular deviation of the ray, exact by definition: the exit ray is the incident
@@ -451,7 +463,7 @@ function stepPrism(params: ScenarioParams, t: number): ScenarioState {
         color: rayColor,
         meta: { role: "refracted-2", angle_deg: theta4Deg, deviation_deg: deviationDeg, wavelength_nm: wavelengthNm },
       })
-    } else {
+    } else if (tirAtFace2) {
       // TIR at face 2 (common at steep angles / high index prisms): reflect the internal ray
       // off face 2's normal instead of exiting.
       const normal2 = normal1.clone().applyAxisAngle(zAxis, apexAngle)
@@ -463,6 +475,20 @@ function stepPrism(params: ScenarioParams, t: number): ScenarioState {
         velocity: [reflectedDir2.x, reflectedDir2.y, reflectedDir2.z],
         color: rayColor,
         meta: { role: "reflected-2-tir", angle_deg: r1Deg, wavelength_nm: wavelengthNm },
+      })
+    } else {
+      // engine-11: invalidGeometryFace2 (r2 < 0). This is NOT TIR — reflect the internal ray off
+      // face 2's normal purely so there's still a visible ray on screen, but tag it distinctly
+      // so nothing downstream mistakes this for a real TIR reflection.
+      const normal2 = normal1.clone().applyAxisAngle(zAxis, apexAngle)
+      const reflectedDir2 = internalDir.clone().reflect(normal2).normalize()
+      objects.push({
+        id: "refracted-ray-2",
+        kind: "ray",
+        position: [hitPoint2.x, hitPoint2.y, hitPoint2.z],
+        velocity: [reflectedDir2.x, reflectedDir2.y, reflectedDir2.z],
+        color: rayColor,
+        meta: { role: "invalid-geometry-face-2", angle_deg: r1Deg, wavelength_nm: wavelengthNm },
       })
     }
   }
@@ -481,19 +507,43 @@ function stepPrism(params: ScenarioParams, t: number): ScenarioState {
     { label: "total internal reflection", value: tirAtFace1 ? "yes" : "no" },
     {
       label: "internal angle at face 2 (r2)",
-      value: tirAtFace1 ? "n/a" : `${(r2Deg ?? 0).toFixed(1)} deg`,
+      value: tirAtFace1
+        ? "n/a"
+        : invalidGeometryFace2
+          ? `${(r2Deg ?? 0).toFixed(1)} deg (invalid: negative)`
+          : `${(r2Deg ?? 0).toFixed(1)} deg`,
     },
     {
       label: "angle of refraction (2nd interface)",
-      value: tirAtFace1 || tirAtFace2 ? "n/a (TIR)" : `${(theta4Deg ?? 0).toFixed(1)} deg`,
+      // engine-11 fix: invalidGeometryFace2 (r1 > apex angle A, so r2 = A - r1 < 0) is a
+      // distinct regime from real TIR (sin(r2)*n2/n1 > 1) and must not be reported as "n/a
+      // (TIR)" — that previously implied a real physical TIR event that never happened.
+      value: tirAtFace1
+        ? "n/a (TIR)"
+        : invalidGeometryFace2
+          ? "n/a (invalid geometry)"
+          : tirAtFace2
+            ? "n/a (TIR)"
+            : `${(theta4Deg ?? 0).toFixed(1)} deg`,
     },
     {
       label: "total internal reflection (2nd interface)",
-      value: tirAtFace1 ? "n/a" : tirAtFace2 ? "yes" : "no",
+      value: tirAtFace1
+        ? "n/a"
+        : invalidGeometryFace2
+          ? "n/a (invalid geometry, not TIR)"
+          : tirAtFace2
+            ? "yes"
+            : "no",
     },
     {
       label: "angular deviation",
-      value: deviationDeg !== null ? `${deviationDeg.toFixed(2)} deg` : "n/a (TIR)",
+      value:
+        deviationDeg !== null
+          ? `${deviationDeg.toFixed(2)} deg`
+          : invalidGeometryFace2
+            ? "n/a (invalid geometry)"
+            : "n/a (TIR)",
     },
   ]
 
