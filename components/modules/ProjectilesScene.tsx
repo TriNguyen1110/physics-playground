@@ -287,9 +287,26 @@ export const ProjectilesScene = memo(function ProjectilesScene({
   // compression) this offset shrinks too, so a heavily compressed spring
   // visibly tucks in closer to the ball instead of floating in place.
   const springCenterOffset = visualRadius + springLengthM / 2
+  // Bug fix (screenshot-confirmed): the coil's Y was previously derived the
+  // SAME way as X/Z — `launchPosition.y - launchDirection.y * springCenterOffset`
+  // — but launchDirection.y is sin(angle_deg), which is POSITIVE for any
+  // upward launch angle. Subtracting a positive offset*sin(angle) pulls the
+  // whole coil down below GROUND_SURFACE_Y (e.g. at angle_deg=45,
+  // radius_m=0.3 this landed ~0.35m underground), unlike X/Z where that math
+  // is fine because there's no ground plane to clip through sideways.
+  // Fixed the same way the ball's resting Y was fixed earlier: anchor the
+  // coil's LOWEST point (its ground-facing end) to GROUND_SURFACE_Y (+ the
+  // tube's own radius, so the mesh surface itself never clips into the
+  // ground either), then let the coil rise from there toward the ball by
+  // half its own length along the vertical component of the launch
+  // direction. This holds for any launch_angle/azimuth/radius_m/compression
+  // combo since it's derived straight from GROUND_SURFACE_Y instead of
+  // being offset away from an already-correct ball height.
+  const springHalfLengthM = springLengthM / 2
+  const springBaseY = GROUND_SURFACE_Y + SPRING_TUBE_RADIUS_M
   const springPosition: [number, number, number] = [
     launchPosition[0] - launchDirection.x * springCenterOffset,
-    launchPosition[1] - launchDirection.y * springCenterOffset,
+    springBaseY + springHalfLengthM * Math.abs(launchDirection.y),
     launchPosition[2] - launchDirection.z * springCenterOffset,
   ]
 
