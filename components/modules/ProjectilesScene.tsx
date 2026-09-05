@@ -4,6 +4,7 @@ import { memo, useRef, useState, type MutableRefObject } from "react"
 import { useFrame } from "@react-three/fiber"
 import { BallCollider, CuboidCollider, Physics, RigidBody, type RapierRigidBody } from "@react-three/rapier"
 import { ObjectRenderer } from "@/components/ObjectRenderer"
+import { PALETTE } from "@/components/palette"
 import { step as projectilesStep } from "@/lib/physics/projectiles"
 import type { ScenarioParams, ScenarioState } from "@/lib/physics/types"
 
@@ -105,6 +106,36 @@ export const ProjectilesScene = memo(function ProjectilesScene({
   const wallDistance = paramsRef.current.wall_distance ?? 8
   const wallHeight = paramsRef.current.wall_height ?? 0
 
+  // engine-04: step() still returns a fixed radius:0.3 on the object itself
+  // (see lib/physics/projectiles.ts) — radius_m only changes the drag
+  // coefficient there. Scene reads meta.radius_m directly so a bigger
+  // radius_m slider value is also a visibly bigger rendered/collider
+  // sphere, independent of whether drag is on.
+  const visualRadius = (projectile?.meta?.radius_m as number) ?? projectile?.radius ?? 0.3
+  const massKg = (projectile?.meta?.mass_kg as number) ?? 1
+  const dragEnabled = Boolean(projectile?.meta?.drag_enabled)
+  // Read directly from step()'s own meta.drag_k (= DRAG_COEFFICIENT *
+  // radius_m, already computed by lib/physics/projectiles.ts) instead of
+  // duplicating that constant here — guarantees the real per-frame Rapier
+  // force below uses the EXACT same coefficient as the closed-form
+  // apex/range/terminal-velocity readout it's being checked against.
+  const dragK = (projectile?.meta?.drag_k as number) ?? 0
+
+  // Real per-frame linear drag on the flying Rapier body: F_drag = -k*v.
+  // This is what makes the rendered trajectory actually track the
+  // drag-adjusted readout instead of just trusting the closed-form numbers
+  // while Rapier quietly simulates a vacuum. `addForce` only lasts one
+  // physics step, so it's re-applied every frame for as long as the ball
+  // is flying and drag is on.
+  useFrame(() => {
+    if (phase !== "flying") return
+    if (!dragEnabled || dragK <= 0) return
+    const body = bodyRef.current
+    if (!body) return
+    const v = body.linvel()
+    body.addForce({ x: -dragK * v.x, y: -dragK * v.y, z: -dragK * v.z }, true)
+  })
+
   return (
     <Physics gravity={[0, -gravity, 0]}>
       <RigidBody type="fixed" colliders={false} position={[0, GROUND_Y, 0]}>
@@ -117,7 +148,14 @@ export const ProjectilesScene = memo(function ProjectilesScene({
             ~40.8m) already exceeded the old +/-25m half-width. */}
         <CuboidCollider args={[200, 0.15, 3]} restitution={0.55} friction={0.4} />
         <ObjectRenderer
-          object={{ id: "ground", kind: "box", position: [0, 0, 0], color: "#1a2233", meta: { size: [400, 0.3, 6] } }}
+          object={{
+            id: "ground",
+            kind: "box",
+            position: [0, 0, 0],
+            // Locked palette: silver-tinted, neutral structure.
+            color: PALETTE.silver,
+            meta: { size: [400, 0.3, 6] },
+          }}
         />
       </RigidBody>
 
@@ -134,7 +172,8 @@ export const ProjectilesScene = memo(function ProjectilesScene({
               id: "wall",
               kind: "box",
               position: [0, 0, 0],
-              color: "#3a2f45",
+              // Locked palette: maroon is this module's accent glow.
+              color: PALETTE.maroon,
               meta: { size: [0.4, wallHeight, 3] },
             }}
           />
@@ -146,8 +185,8 @@ export const ProjectilesScene = memo(function ProjectilesScene({
           since dragging alone no longer fires the ball). */}
       {projectile && phase === "resting" && (
         <RigidBody key={`rest-${launchId}`} type="fixed" colliders={false} position={projectile.position}>
-          <BallCollider args={[projectile.radius ?? 0.3]} />
-          <ObjectRenderer object={{ ...projectile, position: [0, 0, 0] }} />
+          <BallCollider args={[visualRadius]} />
+          <ObjectRenderer object={{ ...projectile, radius: visualRadius, color: PALETTE.white, position: [0, 0, 0] }} />
         </RigidBody>
       )}
 
@@ -159,10 +198,11 @@ export const ProjectilesScene = memo(function ProjectilesScene({
           colliders={false}
           position={projectile.position}
           linearVelocity={projectile.velocity}
+          mass={massKg}
           ccd
         >
-          <BallCollider args={[projectile.radius ?? 0.3]} restitution={0.55} friction={0.4} />
-          <ObjectRenderer object={{ ...projectile, position: [0, 0, 0] }} />
+          <BallCollider args={[visualRadius]} restitution={0.55} friction={0.4} />
+          <ObjectRenderer object={{ ...projectile, radius: visualRadius, color: PALETTE.white, position: [0, 0, 0] }} />
         </RigidBody>
       )}
     </Physics>

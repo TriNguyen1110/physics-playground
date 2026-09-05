@@ -6,18 +6,22 @@ import { CameraRig } from "@/components/CameraRig"
 import { LightScene } from "@/components/modules/LightScene"
 import { FieldsScene } from "@/components/modules/FieldsScene"
 import { ProjectilesScene } from "@/components/modules/ProjectilesScene"
+import { PALETTE } from "@/components/palette"
 import type { ModuleId } from "@/components/modules/types"
 import type { ScenarioParams, ScenarioState } from "@/lib/physics/types"
 
 // Beaker-by-Thix aesthetic: one dark laboratory void, never a different
 // backdrop per module. Each module's identity lives in what glows, not in
 // the environment behind it.
-const VOID_COLOR = "#05060a"
+const VOID_COLOR = PALETTE.black
 
+// Locked palette: each module's rim/fill light picks its glow out of the
+// dark using the SAME accent it uses everywhere else (MODULE_META.accent),
+// not an unrelated per-module hue.
 const RIM_LIGHT_COLOR: Record<ModuleId, string> = {
-  light: "#8fe9ff",
-  projectiles: "#ff8a5c",
-  fields: "#9a7bff",
+  light: PALETTE.cyan,
+  projectiles: PALETTE.maroon,
+  fields: PALETTE.silver,
 }
 
 export function Scene({
@@ -54,7 +58,7 @@ export function Scene({
           out at ~20-40 units, so add a second, wider-throw fill light aimed
           down the range. */}
       {module === "projectiles" && (
-        <pointLight position={[16, 18, 10]} intensity={1.4} color="#ffcbb0" distance={90} decay={1.6} />
+        <pointLight position={[16, 18, 10]} intensity={1.4} color={PALETTE.maroon} distance={90} decay={1.6} />
       )}
 
       <Suspense fallback={null}>

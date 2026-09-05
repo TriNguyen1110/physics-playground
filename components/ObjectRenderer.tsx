@@ -25,30 +25,58 @@ export function ObjectRenderer({ object }: { object: SceneObject }) {
 
 // Beaker-by-Thix look: near-black bodies that *glow* their module color
 // rather than bright surfaces lit by a bright environment.
+//
+// Segment count bumped 32->48 and emissiveIntensity brought down from 1.6
+// so the scene's real lights (ambient/directional/point, see Scene.tsx)
+// can still paint a visible specular highlight + shaded terminator across
+// the surface — at emissiveIntensity 1.6 the glow alone was washing out
+// that shading, which is what made spheres read as flat glowing discs
+// instead of 3D volumes from some camera angles. A second, larger
+// back-side shell in the object's own color (translucent, additive-ish
+// via low opacity) adds a cheap fresnel/rim-light cue around the visible
+// silhouette edge, the classic trick for making a small emissive sphere
+// look like a lit volume rather than a flat sprite.
 function SphereObject({ object }: { object: SceneObject }) {
   const radius = object.radius ?? 0.3
   return (
-    <mesh position={object.position} castShadow receiveShadow>
-      <sphereGeometry args={[radius, 32, 32]} />
-      <meshStandardMaterial
-        color="#0a0a0d"
-        emissive={object.color}
-        emissiveIntensity={1.6}
-        roughness={0.3}
-        metalness={0.4}
-        toneMapped={false}
-      />
-    </mesh>
+    <group position={object.position}>
+      <mesh castShadow receiveShadow>
+        <sphereGeometry args={[radius, 48, 48]} />
+        <meshPhysicalMaterial
+          color="#0d0e12"
+          emissive={object.color}
+          emissiveIntensity={0.9}
+          roughness={0.25}
+          metalness={0.5}
+          clearcoat={0.5}
+          clearcoatRoughness={0.3}
+          toneMapped={false}
+        />
+      </mesh>
+      <mesh scale={1.08}>
+        <sphereGeometry args={[radius, 32, 32]} />
+        <meshBasicMaterial
+          color={object.color}
+          transparent
+          opacity={0.16}
+          side={THREE.BackSide}
+          toneMapped={false}
+          depthWrite={false}
+        />
+      </mesh>
+    </group>
   )
 }
 
 function BoxObject({ object }: { object: SceneObject }) {
   // A box with no explicit size is almost always a ground/interface/wall
-  // marker plane in this app's three modules — default to a flat slab
-  // rather than a 1x1x1 cube.
-  const size = (object.meta?.size as Vec3) ?? [6, 0.08, 6]
+  // marker plane in this app's three modules — default to a slab with
+  // enough Y-thickness (0.08->0.3) that its top/side faces both catch
+  // light distinctly at typical camera angles, reading as a real 3D slab
+  // rather than a flat, paper-thin panel.
+  const size = (object.meta?.size as Vec3) ?? [6, 0.3, 6]
   return (
-    <mesh position={object.position} receiveShadow>
+    <mesh position={object.position} receiveShadow castShadow>
       <boxGeometry args={size} />
       {/* emissiveIntensity bumped 0.15->0.4 and base color lifted slightly
           (#12131a->#1c1e29): at 0.15 the ground/wall slabs were only a hair
@@ -57,7 +85,7 @@ function BoxObject({ object }: { object: SceneObject }) {
           black instead of visible geometry (see CameraRig.tsx notes on the
           projectiles preset). Still dark/cold per the Beaker-by-Thix look,
           just no longer indistinguishable from empty space. */}
-      <meshStandardMaterial color="#1c1e29" emissive={object.color} emissiveIntensity={0.4} roughness={0.9} metalness={0.1} />
+      <meshStandardMaterial color="#1c1e29" emissive={object.color} emissiveIntensity={0.4} roughness={0.75} metalness={0.25} />
     </mesh>
   )
 }
