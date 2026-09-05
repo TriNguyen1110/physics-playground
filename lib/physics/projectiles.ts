@@ -9,8 +9,9 @@
 //     expected values that Rapier's actual trajectory can be checked against.
 //
 // Params:
-//   angle_deg    — launch angle above horizontal, in degrees. [1, 89]
-//   speed        — launch speed, m/s. [1, 60]
+//   angle_deg    — launch angle (elevation) above horizontal, in degrees. [1, 89]
+//   speed        — launch speed, m/s. [1, 60]. Used directly in manual launch_mode; overridden
+//                  by the spring formula (see spring_k/spring_compression_m below) in spring mode.
 //   gravity      — magnitude of gravitational acceleration, m/s^2. Default 9.81. [1, 20]
 //   mass_kg      — projectile mass, kg. Default 1. [0.1, 50]. Only matters when drag_enabled
 //                  is on — mass alone has zero effect on a vacuum trajectory (Galileo's
@@ -21,6 +22,26 @@
 //   drag_enabled — 0/1 toggle. Default 0 (off), which reproduces the exact original no-drag
 //                  closed-form apex/range/time-of-flight so the base case the verifier already
 //                  checked keeps working unchanged.
+//   azimuth_deg  — rotation of the launch direction around the vertical (Y) axis, degrees.
+//                  Default 0. [0, 360]. At 0 the launch stays in the original X-Y plane
+//                  (z-component of velocity is exactly 0), byte-identical to the pre-existing
+//                  behavior engine-01/04 verified. Nonzero values rotate the horizontal
+//                  component of the launch velocity into +/-Z, giving a full 3D launch
+//                  direction: velocity = speed * (cos(elev)*cos(az), sin(elev), cos(elev)*sin(az)).
+//   launch_mode  — 0 = "manual" (use `speed` directly, default/unchanged), 1 = "spring" (derive
+//                  launch speed from spring_k/spring_compression_m/mass_kg instead — see below).
+//                  Encoded as a number, not a string, since ScenarioParams is
+//                  Record<string, number>; >= 0.5 means spring mode, same convention as
+//                  drag_enabled.
+//   spring_k     — spring constant, N/m. Default 200. [1, 2000]. Only used when
+//                  launch_mode = spring.
+//   spring_compression_m — spring compression distance, m. Default 0.3. [0, 2]. Only used when
+//                  launch_mode = spring.
+//
+// Spring launcher (energy conservation): all spring potential energy converts to launch kinetic
+// energy at release — PE = 0.5*k*x^2 = KE = 0.5*m*v^2 — so v = sqrt(k*x^2/m). This replaces the
+// `speed` param's value (not `angle_deg`/`azimuth_deg`) when launch_mode = spring; manual mode
+// (the default) is completely unaffected and uses `speed` exactly as before.
 //
 // Linear (Stokes) drag, not quadratic: this is the deliberate choice because linear drag has
 // an exact elementary closed form (quadratic drag does not), which is what makes it
@@ -50,22 +71,36 @@ const DRAG_COEFFICIENT = 2.5
 
 export function step(params: ScenarioParams, t: number): ScenarioState {
   const angleDeg = params.angle_deg ?? 45
-  const speed = params.speed ?? 20
+  const azimuthDeg = params.azimuth_deg ?? 0
+  const manualSpeed = params.speed ?? 20
   const g = params.gravity ?? 9.81
   const massKg = Math.max(params.mass_kg ?? 1, 1e-6)
   const radiusM = Math.max(params.radius_m ?? 0.1, 0)
   const dragEnabled = (params.drag_enabled ?? 0) >= 0.5
+  const springMode = (params.launch_mode ?? 0) >= 0.5
+  const springK = params.spring_k ?? 200
+  const springCompressionM = params.spring_compression_m ?? 0.3
+
+  // Energy conservation: spring PE = 0.5*k*x^2 fully converts to launch KE = 0.5*m*v^2, so
+  // v = sqrt(k*x^2/m). Only takes effect in spring mode; manual mode keeps `speed` as-is.
+  const springSpeed = Math.sqrt((springK * springCompressionM * springCompressionM) / massKg)
+  const speed = springMode ? springSpeed : manualSpeed
 
   const angleRad = THREE.MathUtils.degToRad(THREE.MathUtils.clamp(angleDeg, 0.1, 89.9))
+  const azimuthRad = THREE.MathUtils.degToRad(azimuthDeg)
 
   const launchPosition = new THREE.Vector3(0, 0.05, 0)
   const launchVelocity = new THREE.Vector3(
-    Math.cos(angleRad) * speed,
+    Math.cos(angleRad) * Math.cos(azimuthRad) * speed,
     Math.sin(angleRad) * speed,
-    0
+    Math.cos(angleRad) * Math.sin(azimuthRad) * speed
   )
   const vx0 = launchVelocity.x
   const vy0 = launchVelocity.y
+  // Horizontal launch speed magnitude (independent of azimuth direction) — used for the range
+  // readout below. At azimuth 0 this equals vx0 exactly, so the no-drag/drag formulas reduce to
+  // the original 2D-only math byte-for-byte.
+  const h0 = Math.cos(angleRad) * speed
 
   const k = DRAG_COEFFICIENT * radiusM
   const dragActive = dragEnabled && k > 1e-9
@@ -89,7 +124,12 @@ export function step(params: ScenarioParams, t: number): ScenarioState {
     terminalVelocity = g * tau
 
     const yOf = (time: number) => tau * (vy0 + g * tau) * (1 - Math.exp(-time / tau)) - g * tau * time
-    const xOf = (time: number) => tau * vx0 * (1 - Math.exp(-time / tau))
+    // Horizontal (range) displacement magnitude. Linear drag decouples per-axis, so x and z each
+    // decay independently with the same tau; since vx0 = h0*cos(az) and vz0 = h0*sin(az), the
+    // horizontal path is a straight line in the (vx0, vz0) direction whose magnitude is exactly
+    // this h0-based formula (reduces to the original xOf(t) = tau*vx0*(1-exp(-t/tau)) when
+    // azimuth = 0, since h0 = vx0 there).
+    const hOf = (time: number) => tau * h0 * (1 - Math.exp(-time / tau))
 
     const tApex = tau * Math.log((vy0 + g * tau) / (g * tau))
     apexHeight = yOf(tApex)
@@ -110,7 +150,7 @@ export function step(params: ScenarioParams, t: number): ScenarioState {
       else hi = mid
     }
     timeOfFlight = (lo + hi) / 2
-    range = xOf(timeOfFlight)
+    range = hOf(timeOfFlight)
   }
 
   const objects: SceneObject[] = [
@@ -124,7 +164,11 @@ export function step(params: ScenarioParams, t: number): ScenarioState {
       meta: {
         role: "launch",
         angle_deg: angleDeg,
+        azimuth_deg: azimuthDeg,
         speed,
+        launch_mode: springMode ? "spring" : "manual",
+        spring_k: springK,
+        spring_compression_m: springCompressionM,
         gravity: g,
         mass_kg: massKg,
         radius_m: radiusM,
@@ -139,8 +183,14 @@ export function step(params: ScenarioParams, t: number): ScenarioState {
   ]
 
   const readouts: ScenarioState["readouts"] = [
-    { label: "launch angle", value: `${angleDeg.toFixed(1)} deg` },
-    { label: "launch speed", value: `${speed.toFixed(1)} m/s` },
+    { label: "launch angle (elevation)", value: `${angleDeg.toFixed(1)} deg` },
+    { label: "launch azimuth", value: `${azimuthDeg.toFixed(1)} deg` },
+    {
+      label: "launch speed",
+      value: springMode
+        ? `${speed.toFixed(2)} m/s (spring: k=${springK.toFixed(1)} N/m, x=${springCompressionM.toFixed(2)} m)`
+        : `${speed.toFixed(1)} m/s`,
+    },
     { label: "gravity", value: `${g.toFixed(2)} m/s^2` },
     { label: "mass", value: `${massKg.toFixed(2)} kg` },
     { label: "radius", value: `${radiusM.toFixed(3)} m` },
