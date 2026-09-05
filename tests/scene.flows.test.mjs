@@ -20,14 +20,24 @@
 //     real screenshot but still catches an accidental regression (e.g. someone reintroducing a
 //     <pre> dump or a per-module background color).
 //
-// A real Playwright run (done manually for this scene-01 SCREEN review — see BOARD.tsv) found:
-//   - console/network: clean across all 3 modules
-//   - every slider produces a live readout change EXCEPT fields' test_velocity and b_field, which
-//     each individually produce NO change (from their own MODULE_META defaults) because the
-//     Lorentz magnetic term v x B is exactly zero whenever either factor is zero, and both
-//     default to 0. That specific bug is reproduced here as a pure step()-level check (see
-//     "fields: b_field/test_velocity ..." tests below), so it's caught by `node --test` without
-//     needing a browser at all.
+// A real Playwright run against commit eea1aff (final re-check, this verifier pass) found the
+// fields inert-slider bug (test_velocity/b_field both defaulting to 0, making v x B always 0)
+// FIXED: from a fresh default load, dragging b_field alone (test_velocity held at its own
+// nonzero default 5) sweeps the Lorentz readout 7.5N->17.5N, and dragging test_velocity alone
+// (b_field held at its own nonzero default 1.5) likewise changes it — verified via real
+// keyboard-driven slider drags (focus + Home/End), not synthetic JS events. Note: at the exact
+// untouched default state (test_velocity=5, b_field=1.5) the E-field and v x B terms happen to
+// cancel exactly, so the Lorentz readout reads 0.000N at rest — that's correct physics
+// (coincidental cancellation), not a bug, and every slider still produces a distinct change
+// across its range as required.
+//
+// This same Playwright run found a NEW, unrelated, blocking SCREEN failure in `projectiles`:
+// the launched ball never visibly renders in the canvas (pixel-diffed screenshots across the
+// whole flight are byte-identical in the canvas region every frame) and falls straight through
+// the ground RigidBody with no bounce (live height goes to -73m and still falling), even though
+// the live Rapier readout itself updates correctly frame to frame. See BOARD.tsv scene-01 `doing`
+// row for the full repro. Not reproducible as a pure step()-level test here since it's a live
+// Rapier/render issue inside components/modules/ProjectilesScene.tsx, not lib/physics/*.ts.
 
 import { test } from "node:test"
 import assert from "node:assert/strict"
@@ -126,17 +136,14 @@ test('light aha: angle_deg slider (MODULE_META range/defaults) flips "total inte
 })
 
 // ---------------------------------------------------------------------------
-// fields: KNOWN BUG (reproduced here without a browser) — dragging b_field or test_velocity
-// alone, holding the other at its own MODULE_META default (both default to 0), never changes any
-// readout, because the magnetic term v x B is exactly zero whenever either factor is zero. This
-// fails verifier.md's SCREEN check ("every module shows a live readout that changes when a
-// slider moves") for these two specific sliders. Tracked in BOARD.tsv as scene-01 `doing` with
-// the fix instruction. These two tests are EXPECTED TO FAIL until scene gives one of
-// test_velocity/b_field a nonzero MODULE_META default (or adds a readout that depends on each
-// slider independently of the other).
+// fields: regression guard for a bug kicked back twice (BOARD.tsv scene-01) — dragging b_field
+// or test_velocity alone, holding the other at its own MODULE_META default, must change the
+// Lorentz readout. Fixed as of eea1aff (both sliders now default nonzero: test_velocity=5,
+// b_field=1.5), so both assertions below now pass; kept as a standing regression test since this
+// exact bug class reappeared once already after a partial fix.
 // ---------------------------------------------------------------------------
 
-test("fields: b_field slider alone (test_velocity at its own MODULE_META default) should change the Lorentz force readout — KNOWN FAILING, see BOARD.tsv scene-01", () => {
+test("fields: b_field slider alone (test_velocity at its own MODULE_META default) changes the Lorentz force readout", () => {
   const base = defaultParams("fields")
   const bFieldSlider = MODULE_META.fields.sliders.find((s) => s.key === "b_field")
   const at = (v) => fieldsStep({ ...base, b_field: v }, 0).objects.find((o) => o.id === "test-particle").meta.lorentz_force
@@ -145,7 +152,7 @@ test("fields: b_field slider alone (test_velocity at its own MODULE_META default
   assert.notDeepEqual(atMin, atMax, "Lorentz force did not change across b_field's full range with test_velocity at default")
 })
 
-test("fields: test_velocity slider alone (b_field at its own MODULE_META default) should change the Lorentz force readout — KNOWN FAILING, see BOARD.tsv scene-01", () => {
+test("fields: test_velocity slider alone (b_field at its own MODULE_META default) changes the Lorentz force readout", () => {
   const base = defaultParams("fields")
   const vSlider = MODULE_META.fields.sliders.find((s) => s.key === "test_velocity")
   const at = (v) => fieldsStep({ ...base, test_velocity: v }, 0).objects.find((o) => o.id === "test-particle").meta.lorentz_force
