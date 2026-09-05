@@ -32,8 +32,19 @@ import type { ModuleId } from "@/components/modules/types"
 // `cameraView` state) and whatever "Home" returns to.
 export type CameraView = ModuleId | "hub"
 
+// hub distance re-tuned (hub-splat-scale-01): the splat's native scan is a
+// modest single-room extent (~12x2.5x13 units, see SplatBackdrop.tsx) that
+// only reads as an enclosing hallway/room within roughly module-preset
+// distance (~10-27 units to target). The original hub position sat ~39
+// units from its target — ~5x farther than any module preset — which made
+// the correctly-scaled splat read as a small distant blob instead of the
+// room it's supposed to be. Pulled to ~16 units out (same direction/angle,
+// just closer) so the hub overview is still elevated/pulled-back relative
+// to the module presets, but close enough for the splat to read as real
+// enclosing space. Still wide enough to keep all three module directions
+// (light/fields near origin, projectiles out along +X) in frame.
 const CAMERA_PRESETS: Record<CameraView, { position: Vec3; target: Vec3 }> = {
-  hub: { position: [4, 17, 36], target: [4, 2, 0] },
+  hub: { position: [4, 8, 14.4], target: [4, 2, 0] },
   light: { position: [0, 3.2, 7.5], target: [0, 0.6, 0] },
   projectiles: { position: [-2, 10, 24], target: [8, 4, 0] },
   fields: { position: [0, 6, 6.5], target: [0, 0, 0] },

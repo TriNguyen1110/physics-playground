@@ -113,9 +113,15 @@ export function SplatBackdrop() {
   // once per `gl` instance via args, not re-created every render.
   const rendererArgs = useMemo(() => [{ renderer: gl }] as const, [gl])
   const meshArgs = useMemo(() => [{ url: SPLAT_URL }] as const, [])
+  // On by default (hub-splat-scale-01): now that the hub camera preset sits
+  // close enough (see CameraRig.tsx) for the splat's native scan to read as
+  // an actual enclosing room rather than a distant blob, this is the room
+  // the user starts in on load/Home, not an easter egg behind a query param
+  // anymore. `?splat=0` remains as an escape hatch if it needs to be turned
+  // off quickly (e.g. for a clean non-splat comparison shot).
   const [enabled] = useState(() => {
-    if (typeof window === "undefined") return false
-    return new URLSearchParams(window.location.search).get("splat") === "1"
+    if (typeof window === "undefined") return true
+    return new URLSearchParams(window.location.search).get("splat") !== "0"
   })
 
   if (!enabled) return null
