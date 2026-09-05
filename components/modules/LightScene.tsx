@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useMemo, type MutableRefObject } from "react"
+import { useEffect, useMemo, useRef, type MutableRefObject } from "react"
 import * as THREE from "three"
 import { Line } from "@react-three/drei"
 import { ObjectRenderer } from "@/components/ObjectRenderer"
@@ -191,6 +191,45 @@ export function LightScene({
   const role = (interfaceObj?.meta?.role as string | undefined) ?? "interface"
   const isPrism = role === "prism-face-1"
   const isLens = role === "convex-lens" || role === "concave-lens"
+  const isGlassElement = isPrism || isLens
+
+  // Bug fix (light-multiray-01 follow-up): the shared n2 slider defaults to 1.0, which is
+  // correct as an "air" value for the slab element (0) but is physically wrong as a glass
+  // index for prism/lens (1/2/3) — real glass is ~1.5. At n2=1.0, engine-10's dispersion floor
+  // (MIN_LENS_GLASS_N=1.05) clamps every wavelength in the prism fan to the identical flat
+  // 1.05, so the whole rainbow-fan/convergence-bundle effect built above renders with zero
+  // visible spread. Auto-bump n2 to a glass-appropriate value the instant element_type
+  // transitions from slab (0) into prism/lens (nonzero), and restore the slab-appropriate
+  // value on the way back — but ONLY on that edge transition (never every render), and ONLY
+  // when the current n2 still looks like the value we ourselves last set, so a user's own
+  // deliberate n2 tweak after switching is never stomped.
+  const wasGlassElementRef = useRef(isGlassElement)
+  useEffect(() => {
+    if (wasGlassElementRef.current === isGlassElement) return
+    wasGlassElementRef.current = isGlassElement
+    const current = paramsRef.current.n2
+    let next: number | null = null
+    if (isGlassElement) {
+      // Entering prism/lens: only bump if n2 still looks like the untouched slab default —
+      // don't override a value the user already raised themselves.
+      if (current <= 1.05) next = 1.5
+    } else {
+      // Returning to slab: only restore if n2 still looks like the auto-bump we applied —
+      // don't override a value the user deliberately set while in prism/lens mode.
+      if (Math.abs(current - 1.5) < 1e-6) next = 1.0
+    }
+    if (next === null) return
+    paramsRef.current.n2 = next
+    // Sliders in ControlPanel.tsx are uncontrolled <input type="range"> elements (no React
+    // state), so a programmatic paramsRef write alone never moves the visible thumb/readout —
+    // ControlPanel only pushes that on its own onChange. Mirror that same DOM-write pattern
+    // here (locate the slider via its value-readout's data attribute, since the range input
+    // itself carries no unique test id) so the UI reflects this auto-adjustment truthfully.
+    const valueEl = document.querySelector<HTMLElement>('[data-slider-value="n2"]')
+    const input = valueEl?.closest("label")?.querySelector<HTMLInputElement>('input[type="range"]')
+    if (input) input.value = String(next)
+    if (valueEl) valueEl.textContent = next.toFixed(2)
+  }, [isGlassElement, paramsRef])
 
   // The current slider-selected ray, pulled out of the single-call `state` so it can be drawn
   // thicker/highlighted among the multi-ray bundle below rather than getting lost in the fan.
