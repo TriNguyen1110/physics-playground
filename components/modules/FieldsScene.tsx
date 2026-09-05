@@ -1,15 +1,28 @@
 "use client"
 
-import { useEffect, useMemo, type MutableRefObject } from "react"
+import { useEffect, useMemo, useRef, useState, type MutableRefObject } from "react"
 import * as THREE from "three"
+import { useFrame } from "@react-three/fiber"
 import { TransformControls } from "@react-three/drei"
 import { ObjectRenderer } from "@/components/ObjectRenderer"
 import { FieldVectorRenderer } from "@/components/FieldVectorRenderer"
 import { PALETTE } from "@/components/palette"
 import { useLiveScenario } from "@/components/modules/useLiveScenario"
-import { step as fieldsStep } from "@/lib/physics/fields"
+import { step as fieldsStep, stepTrajectory } from "@/lib/physics/fields"
 import type { ScenarioParams, ScenarioState } from "@/lib/physics/types"
 import type { SceneObject, Vec3 } from "@/lib/physics/types"
+
+// fields-play-01: the "t" window `stepTrajectory` re-integrates every frame, wrapped so the
+// per-frame RK4 cost (lib/physics/fields.ts caps it at 20000 substeps, growing with `t` up to
+// that cap for any scenario with a nonzero B field) never keeps climbing across a long-running
+// demo session. Wrapping resets `t` back to 0 every `TRAJECTORY_LOOP_PERIOD_S` seconds instead
+// of letting elapsed real time grow unboundedly — for a periodic cyclotron/helical orbit this is
+// invisible (the orbit already repeats faster than this window in every reachable-by-slider
+// case we checked: default solenoid/magnet/point-charge B strengths give cyclotron periods far
+// longer than a human notices one loop point, and default no-B scenarios integrate in a constant
+// 500 substeps regardless of t anyway); for a net E x B drift it reads as a smooth restart rather
+// than a visible stutter. 45s is long enough to show many orbits/a full drift arc before looping.
+const TRAJECTORY_LOOP_PERIOD_S = 45
 
 // --- CRUD stage 1 (crud-fields-01) ------------------------------------------------------------
 // Pattern established here for reuse by crud-projectiles-01/crud-light-01: drei's
@@ -77,6 +90,29 @@ export function FieldsScene({
 }) {
   const state = useLiveScenario(fieldsStep, paramsRef)
 
+  // fields-play-01: the test particle's REAL motion under the Lorentz force — continuous from
+  // mount, not a button-triggered one-shot like ProjectilesScene's Launch. Cyclotron/E x B
+  // motion is an ongoing steady-state (there's no natural "the particle is done moving" moment
+  // the way a projectile lands), so animating it continuously is the more honest fit than
+  // requiring a "Play" click first. `elapsedRef` accumulates real time via useFrame's `delta`;
+  // `trajectoryParticle` is the only thing read from `stepTrajectory` here — the source objects
+  // (charges/coil/plates/magnet) still come from the static `fieldsStep` call above, unchanged.
+  const elapsedRef = useRef(0)
+  const [trajectoryParticle, setTrajectoryParticle] = useState<{ position: Vec3; velocity: Vec3 } | null>(null)
+
+  useFrame((_, delta) => {
+    elapsedRef.current += delta
+    const wrappedT = elapsedRef.current % TRAJECTORY_LOOP_PERIOD_S
+    const traj = stepTrajectory(paramsRef.current, wrappedT)
+    const particle = traj.objects.find((o) => o.id === "test-particle")
+    if (particle) {
+      setTrajectoryParticle({
+        position: particle.position,
+        velocity: (particle.velocity as Vec3) ?? [0, 0, 0],
+      })
+    }
+  })
+
   useEffect(() => {
     onReadouts(state.readouts)
   }, [state, onReadouts])
@@ -114,7 +150,17 @@ export function FieldsScene({
             return { ...o, color: charge >= 0 ? PALETTE.maroon : PALETTE.cyan }
           }
           if (o.meta?.role === "test-particle") {
-            return { ...o, color: PALETTE.white }
+            // Position/velocity here come from the CONTINUOUS `stepTrajectory` animation above,
+            // not the static `fieldsStep` position `o` already carries — that static position is
+            // only ever t=0 (see fields.ts's `initialTestState`), which is why the particle used
+            // to render as a fixed dot with no visible motion. Falls back to the static value
+            // only for the first frame or two before `trajectoryParticle` has been set once.
+            return {
+              ...o,
+              color: PALETTE.white,
+              position: trajectoryParticle?.position ?? o.position,
+              velocity: trajectoryParticle?.velocity ?? o.velocity,
+            }
           }
           if (o.meta?.role === "capacitor_plate") {
             const polarity = o.meta.polarity as string
@@ -128,7 +174,7 @@ export function FieldsScene({
           }
           return o
         }),
-    [state.objects]
+    [state.objects, trajectoryParticle]
   )
 
   return (
