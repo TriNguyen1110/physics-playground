@@ -2,7 +2,7 @@
 
 import { Suspense, type MutableRefObject } from "react"
 import { Environment, ContactShadows } from "@react-three/drei"
-import { CameraRig } from "@/components/CameraRig"
+import { CameraRig, type CameraView } from "@/components/CameraRig"
 import { SplatBackdrop } from "@/components/SplatBackdrop"
 import { LightScene } from "@/components/modules/LightScene"
 import { FieldsScene } from "@/components/modules/FieldsScene"
@@ -27,10 +27,16 @@ const RIM_LIGHT_COLOR: Record<ModuleId, string> = {
 
 export function Scene({
   module,
+  cameraView,
   paramsRef,
   onReadouts,
 }: {
   module: ModuleId
+  // Where the camera should actually be looking from — decoupled from
+  // `module` (which drives which module's physics/UI is active) so the
+  // "Home" button can pull the camera back out to the hub overview without
+  // tearing down/changing the active module's content underneath it.
+  cameraView: CameraView
   paramsRef: MutableRefObject<ScenarioParams>
   onReadouts: (r: ScenarioState["readouts"]) => void
 }) {
@@ -58,7 +64,7 @@ export function Scene({
           the app. */}
       <SplatBackdrop />
 
-      <CameraRig module={module} />
+      <CameraRig view={cameraView} />
 
       {/* Dim, cold base lighting — the glowing simulation elements are the
           light source the eye actually reads, not this. */}
