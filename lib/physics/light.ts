@@ -37,6 +37,22 @@ function nAtWavelength(nSlider: number, wavelengthNm: number): number {
   return a + CAUCHY_B_NM2 / (wavelengthNm * wavelengthNm)
 }
 
+// engine-10 fix: floor for the GLASS index in the prism/lens paths only. The shared `n2` slider
+// defaults to 1.0 — a value that is legitimately correct for the SLAB path (glass -> air, air is
+// really 1.0) but is reused as the PRISM/LENS GLASS index too, where 1.0 is nonsensical (real
+// glass is always > 1.0 relative to vacuum/air). Combined with Cauchy dispersion at the red end
+// of the visible range (large wavelength_nm shrinks the B/lambda^2 term the most), n2=1.0 dips
+// the computed index below 1.0 entirely (e.g. n(700nm) = 0.9965 — physically nonsensical, and it
+// was producing genuinely wrong refraction geometry). 1.05 is picked as the floor because it's
+// comfortably above vacuum/air (1.0) so it always reads as "definitely real glass", while still
+// being far below any legitimate default glass slider (1.5) so it never clips real physically-
+// intended values in either the prism or lens paths.
+const MIN_LENS_GLASS_N = 1.05
+
+function clampToLensGlassFloor(n: number): number {
+  return Math.max(n, MIN_LENS_GLASS_N)
+}
+
 // Bruton's algorithm: standard public-domain piecewise wavelength(nm) -> RGB mapping for the
 // visible spectrum (~380-780nm), with a Gamma correction and an edge-intensity attenuation
 // factor near the limits of vision.
@@ -322,7 +338,8 @@ function stepPrism(params: ScenarioParams, t: number): ScenarioState {
   const apexAngleDeg = THREE.MathUtils.clamp(params.apex_angle_deg ?? 60, 10, 90)
   const wavelengthNm = THREE.MathUtils.clamp(params.wavelength_nm ?? 590, 400, 700)
 
-  const n2 = nAtWavelength(n2Slider, wavelengthNm)
+  // PRISM path: n2 here is GLASS, never air — floor it (slab's n2=1.0-means-air path is untouched).
+  const n2 = clampToLensGlassFloor(nAtWavelength(n2Slider, wavelengthNm))
   const rayColor = wavelengthToColor(wavelengthNm)
 
   const theta1 = THREE.MathUtils.degToRad(angleDeg)
@@ -520,7 +537,8 @@ function stepPrism(params: ScenarioParams, t: number): ScenarioState {
 function stepLens(params: ScenarioParams, t: number, converging: boolean): ScenarioState {
   const nSlider = params.n2 ?? 1.5
   const wavelengthNm = THREE.MathUtils.clamp(params.wavelength_nm ?? 590, 400, 700)
-  const n = nAtWavelength(nSlider, wavelengthNm)
+  // LENS path: n here is GLASS, never air — floor it (slab's n2=1.0-means-air path is untouched).
+  const n = clampToLensGlassFloor(nAtWavelength(nSlider, wavelengthNm))
   const rayColor = wavelengthToColor(wavelengthNm)
 
   const R1 = params.R1_m ?? (converging ? 0.5 : -0.5)
