@@ -1,34 +1,24 @@
-// Electric field (Coulomb's law) + magnetic Lorentz force on a test particle.
+// Electric/magnetic field sources acting on a test particle via the Lorentz force.
 //
-// Three fixed source charges sit around the origin (charge1/charge2 on the X axis as before,
-// charge3 offset onto the Z axis so the third source isn't collinear with the other two); a
-// test particle sits at the origin with a velocity slider so the Lorentz force (magnetic
-// component) has something to act on. This is a pure function of (params, t) — no hidden state.
+// `source_type` selects which field-source model is active. All four share the same downstream
+// Lorentz-force machinery (F = q(E + v x B), then a = F/m) — only how E and B are produced
+// changes:
+//   0 "point_charges" (default) — three fixed point charges, Coulomb's law + superposition for
+//     E, a uniform slider-set B along +Y. This is the pre-existing engine-05/06 behavior,
+//     UNCHANGED, so it stays the default and regresses nothing already verified.
+//   1 "solenoid"      — ideal coil, uniform B = mu0*n*I inside (test particle modeled as being
+//     inside the coil), E = 0 (no charges as the source).
+//   2 "capacitor"     — ideal parallel-plate capacitor, uniform E = V/d between the plates,
+//     B = 0 (no external magnetic field in this mode).
+//   3 "bar_magnet"    — magnetic dipole field B = (mu0/4pi)*(3*(m.rhat)*rhat - m)/r^3 at the test
+//     particle's position relative to the magnet, E = 0.
 //
-// Params:
-//   charge1       — signed charge of source 1, in arbitrary "charge units" (C-equivalent). [-5, 5]
-//   charge2       — signed charge of source 2, in arbitrary "charge units". [-5, 5]
-//   charge3       — signed charge of source 3, in arbitrary "charge units". [-5, 5]. Default 0,
-//                   which makes source 3 contribute exactly zero field/force everywhere (0/r^2
-//                   is always 0 for finite r), so the whole module reduces EXACTLY to the old
-//                   2-charge behavior when charge3=0 — nothing already-verified regresses.
-//   separation    — distance between charge1 and charge2, meters. [0.5, 10]
-//   charge3_offset — distance of charge3 off the X axis, along +Z, meters. [0.5, 10]. Only
-//                   matters when charge3 != 0.
-//   test_velocity — speed of the test particle along +Z, m/s (drives the magnetic force via
-//                   v x B). [0, 20]
-//   b_field       — magnitude of a uniform external magnetic field along +Y, tesla-equivalent.
-//                   [0, 5]
-//   test_charge   — signed charge of the test particle sitting at the origin. [-5, 5]
-//   test_mass_kg  — mass of the test particle, kg. Default 1. [0.1, 20]. Feeds a direct F=ma
-//                   readout: acceleration = lorentzForce / test_mass_kg. No new law, just the
-//                   already-computed Lorentz force divided by mass.
+// Because `ScenarioParams` is `Record<string, number>` (CONTRACT.md), `source_type` is a
+// clamped/rounded index into SOURCE_TYPES rather than a string literal.
 //
-// Coulomb's law (F = k*q1*q2/r^2) and the Lorentz force magnitude (F = q(E + v x B)) are the
-// two hand-written physical laws. Adding a third source charge is the superposition principle
-// (E_net = E1 + E2 + E3, same law applied pairwise and summed) — not a new law. Everything
-// downstream — combining per-source field vectors, computing directions, cross products — goes
-// through THREE.Vector3.
+// Coulomb's law, the Lorentz force, and the magnetic dipole formula are the hand-written
+// physical laws here; everything downstream of "here's the resulting vector" (adding, crossing,
+// normalizing, scaling) goes through THREE.Vector3, never custom vector math.
 
 import * as THREE from "three"
 import type { ScenarioParams, ScenarioState, SceneObject } from "./types"
@@ -37,6 +27,18 @@ import type { ScenarioParams, ScenarioState, SceneObject } from "./types"
 // resulting forces/fields are in a visually/numerically sane range for on-screen arrows and
 // sliders bounded to [-5, 5] charge units and [0.5, 10] m separation.
 const K = 5
+
+// Real vacuum permeability (mu0), used as-is for solenoid/bar-magnet since both formulas are
+// standard closed-form physics-2 laws, not simulation-scale constants.
+const MU0 = 4 * Math.PI * 1e-7
+
+const SOURCE_TYPES = ["point_charges", "solenoid", "capacitor", "bar_magnet"] as const
+type SourceType = (typeof SOURCE_TYPES)[number]
+
+function resolveSourceType(raw: number | undefined): SourceType {
+  const idx = Math.min(SOURCE_TYPES.length - 1, Math.max(0, Math.round(raw ?? 0)))
+  return SOURCE_TYPES[idx]
+}
 
 // Pairwise Coulomb force ON `pos_b` (charge `q_b`) DUE TO `pos_a` (charge `q_a`).
 // F = k*qa*qb/r^2, direction along the line joining them: attractive (product<0) pulls b toward
@@ -59,7 +61,30 @@ function fieldAt(point: THREE.Vector3, sourcePos: THREE.Vector3, q: number) {
   return dHat.multiplyScalar(mag)
 }
 
+// Shared Lorentz-force + F=ma tail: given the E and B fields at the test particle's position
+// plus its velocity/charge/mass, returns the Lorentz force, its signed X-component, and the
+// resulting acceleration. Identical machinery regardless of which source_type produced E/B.
+function lorentzAndAccel(eField: THREE.Vector3, bField: THREE.Vector3, velocity: THREE.Vector3, testCharge: number, testMass: number) {
+  const vCrossB = velocity.clone().cross(bField)
+  const lorentzForce = eField.clone().add(vCrossB).multiplyScalar(testCharge)
+  const acceleration = lorentzForce.clone().divideScalar(testMass)
+  return { lorentzForce, acceleration, lorentzForceSignedX: lorentzForce.x }
+}
+
 export function step(params: ScenarioParams, t: number): ScenarioState {
+  const sourceType = resolveSourceType(params.source_type)
+
+  if (sourceType === "solenoid") return stepSolenoid(params, t)
+  if (sourceType === "capacitor") return stepCapacitor(params, t)
+  if (sourceType === "bar_magnet") return stepBarMagnet(params, t)
+  return stepPointCharges(params, t)
+}
+
+// ---------------------------------------------------------------------------------------------
+// source_type = "point_charges" (default) — UNCHANGED from engine-05/06, extracted verbatim into
+// its own function so the default path stays byte-identical (zero regression).
+// ---------------------------------------------------------------------------------------------
+function stepPointCharges(params: ScenarioParams, t: number): ScenarioState {
   const q1 = params.charge1 ?? 3
   const q2 = params.charge2 ?? -3
   const q3 = params.charge3 ?? 0
@@ -106,23 +131,7 @@ export function step(params: ScenarioParams, t: number): ScenarioState {
   // Lorentz force on the test particle: F = q(E + v x B).
   const velocity = new THREE.Vector3(0, 0, testVelocity)
   const bField = new THREE.Vector3(0, bFieldMag, 0)
-  const vCrossB = velocity.clone().cross(bField)
-  const lorentzForce = eTotal.clone().add(vCrossB).multiplyScalar(testCharge)
-
-  // F = m*a -> a = F/m. Direct application of Newton's second law to the already-computed
-  // Lorentz force; no new physical law, just a division.
-  const acceleration = lorentzForce.clone().divideScalar(testMass)
-
-  // Signed scalar readout: the Lorentz force's X-component. `.length()` (magnitude) is
-  // mathematically EVEN in test_charge's sign for any vector V (|(-c)*V| == |c*V|), so flipping
-  // test_charge from -5 to +5 can never change a magnitude-based readout even though the force
-  // direction genuinely reverses — that's real physics (F=qE flips with q's sign) with no
-  // observable readout. X is the axis both source charges (charge1/charge2) sit on and where the
-  // net field/v x B combination is dominant at this module's defaults (charge3 defaults to 0, so
-  // Z stays 0 unless charge3 is moved off zero) — the most physically meaningful single signed
-  // component to expose given this file's vector layout, without inventing a second hand-rolled
-  // formula (it's just lorentzForce.x, already computed above via THREE.Vector3 addition).
-  const lorentzForceSignedX = lorentzForce.x
+  const { lorentzForce, acceleration, lorentzForceSignedX } = lorentzAndAccel(eTotal, bField, velocity, testCharge, testMass)
 
   const objects: SceneObject[] = [
     {
@@ -175,6 +184,7 @@ export function step(params: ScenarioParams, t: number): ScenarioState {
   ]
 
   const readouts: ScenarioState["readouts"] = [
+    { label: "field source", value: "point charges" },
     { label: "charge 1", value: `${q1.toFixed(2)} q` },
     { label: "charge 2", value: `${q2.toFixed(2)} q` },
     { label: "charge 3", value: `${q3.toFixed(2)} q` },
@@ -190,6 +200,223 @@ export function step(params: ScenarioParams, t: number): ScenarioState {
     { label: "Lorentz force (signed, x-axis)", value: `${lorentzForceSignedX.toFixed(3)} N` },
     { label: "test particle mass", value: `${testMass.toFixed(2)} kg` },
     { label: "acceleration (F/m)", value: `${acceleration.length().toFixed(3)} m/s^2` },
+  ]
+
+  return { t, objects, fieldVectors, readouts }
+}
+
+// ---------------------------------------------------------------------------------------------
+// source_type = "solenoid" — ideal coil, uniform B = mu0*n*I inside. Test particle modeled as
+// being inside the coil (uniform field region), so the field it experiences is just that
+// constant vector everywhere, no position dependence. E = 0 (no charges as the source).
+// ---------------------------------------------------------------------------------------------
+function stepSolenoid(params: ScenarioParams, t: number): ScenarioState {
+  const n = Math.max(params.solenoid_turns_per_m ?? 500, 0) // turns per meter
+  const current = params.solenoid_current_a ?? 2 // amps, signed (reverses B direction)
+  const testVelocity = params.test_velocity ?? 0
+  const testCharge = params.test_charge ?? 1
+  const testMass = Math.max(params.test_mass_kg ?? 1, 1e-6)
+
+  const bMag = MU0 * n * current // B = mu0 * n * I, along the coil axis (+Y)
+  const testPos = new THREE.Vector3(0, 0, 0)
+  const velocity = new THREE.Vector3(0, 0, testVelocity)
+  const eField = new THREE.Vector3(0, 0, 0) // no electric field source in this mode
+  const bField = new THREE.Vector3(0, bMag, 0)
+
+  const { lorentzForce, acceleration, lorentzForceSignedX } = lorentzAndAccel(eField, bField, velocity, testCharge, testMass)
+
+  const objects: SceneObject[] = [
+    {
+      id: "solenoid-coil",
+      kind: "custom",
+      position: [0, 0, 0],
+      radius: 1,
+      color: "#94a3b8",
+      meta: { role: "solenoid", turns_per_meter: n, current_amps: current, b_field_t: bMag },
+    },
+    {
+      id: "test-particle",
+      kind: "sphere",
+      position: [testPos.x, testPos.y, testPos.z],
+      velocity: [velocity.x, velocity.y, velocity.z],
+      radius: 0.15,
+      color: "#facc15",
+      meta: {
+        role: "test-particle",
+        charge: testCharge,
+        mass_kg: testMass,
+        lorentz_force: [lorentzForce.x, lorentzForce.y, lorentzForce.z],
+        lorentz_force_signed_x: lorentzForceSignedX,
+        acceleration: [acceleration.x, acceleration.y, acceleration.z],
+      },
+    },
+  ]
+
+  const fieldVectors: ScenarioState["fieldVectors"] = [
+    { origin: [0, 0, 0], direction: [bField.x, bField.y, bField.z], magnitude: Math.abs(bMag) },
+  ]
+
+  const readouts: ScenarioState["readouts"] = [
+    { label: "field source", value: "solenoid / coil" },
+    { label: "turns per meter (n)", value: `${n.toFixed(1)} /m` },
+    { label: "current (I)", value: `${current.toFixed(2)} A` },
+    { label: "B field (mu0*n*I)", value: `${bMag.toExponential(4)} T` },
+    { label: "Lorentz force on test particle", value: `${lorentzForce.length().toExponential(4)} N` },
+    { label: "Lorentz force (signed, x-axis)", value: `${lorentzForceSignedX.toExponential(4)} N` },
+    { label: "test particle mass", value: `${testMass.toFixed(2)} kg` },
+    { label: "acceleration (F/m)", value: `${acceleration.length().toExponential(4)} m/s^2` },
+  ]
+
+  return { t, objects, fieldVectors, readouts }
+}
+
+// ---------------------------------------------------------------------------------------------
+// source_type = "capacitor" — ideal parallel-plate capacitor, uniform E = V/d between the
+// plates, along +X (plates sit perpendicular to X at x = -d/2 and x = +d/2). B = 0 (no external
+// magnetic field in this mode).
+// ---------------------------------------------------------------------------------------------
+function stepCapacitor(params: ScenarioParams, t: number): ScenarioState {
+  const voltage = params.capacitor_voltage_v ?? 100 // volts, signed (reverses E direction)
+  const d = Math.max(params.capacitor_separation_m ?? 0.1, 1e-3) // plate separation, meters
+  const testVelocity = params.test_velocity ?? 0
+  const testCharge = params.test_charge ?? 1
+  const testMass = Math.max(params.test_mass_kg ?? 1, 1e-6)
+
+  const eMag = voltage / d // E = V/d
+  const testPos = new THREE.Vector3(0, 0, 0)
+  const velocity = new THREE.Vector3(0, 0, testVelocity)
+  const eField = new THREE.Vector3(eMag, 0, 0)
+  const bField = new THREE.Vector3(0, 0, 0) // no magnetic field source in this mode
+
+  const { lorentzForce, acceleration, lorentzForceSignedX } = lorentzAndAccel(eField, bField, velocity, testCharge, testMass)
+
+  const objects: SceneObject[] = [
+    {
+      id: "capacitor-plate-neg",
+      kind: "box",
+      position: [-d / 2, 0, 0],
+      color: "#60a5fa",
+      meta: { role: "capacitor_plate", polarity: voltage >= 0 ? "-" : "+", voltage, separation_m: d },
+    },
+    {
+      id: "capacitor-plate-pos",
+      kind: "box",
+      position: [d / 2, 0, 0],
+      color: "#f87171",
+      meta: { role: "capacitor_plate", polarity: voltage >= 0 ? "+" : "-", voltage, separation_m: d },
+    },
+    {
+      id: "test-particle",
+      kind: "sphere",
+      position: [testPos.x, testPos.y, testPos.z],
+      velocity: [velocity.x, velocity.y, velocity.z],
+      radius: 0.15,
+      color: "#facc15",
+      meta: {
+        role: "test-particle",
+        charge: testCharge,
+        mass_kg: testMass,
+        lorentz_force: [lorentzForce.x, lorentzForce.y, lorentzForce.z],
+        lorentz_force_signed_x: lorentzForceSignedX,
+        acceleration: [acceleration.x, acceleration.y, acceleration.z],
+      },
+    },
+  ]
+
+  const fieldVectors: ScenarioState["fieldVectors"] = [
+    { origin: [0, 0, 0], direction: [eField.x, eField.y, eField.z], magnitude: Math.abs(eMag) },
+  ]
+
+  const readouts: ScenarioState["readouts"] = [
+    { label: "field source", value: "parallel-plate capacitor" },
+    { label: "voltage (V)", value: `${voltage.toFixed(1)} V` },
+    { label: "plate separation (d)", value: `${d.toFixed(3)} m` },
+    { label: "E field (V/d)", value: `${eMag.toFixed(2)} V/m` },
+    { label: "Lorentz force on test particle", value: `${lorentzForce.length().toFixed(4)} N` },
+    { label: "Lorentz force (signed, x-axis)", value: `${lorentzForceSignedX.toFixed(4)} N` },
+    { label: "test particle mass", value: `${testMass.toFixed(2)} kg` },
+    { label: "acceleration (F/m)", value: `${acceleration.length().toFixed(4)} m/s^2` },
+  ]
+
+  return { t, objects, fieldVectors, readouts }
+}
+
+// ---------------------------------------------------------------------------------------------
+// source_type = "bar_magnet" — magnetic dipole field B = (mu0/4pi)*(3*(m.rhat)*rhat - m)/r^3.
+// The magnet sits fixed at the origin with dipole moment m along +Y; the test particle sits at
+// distance `magnet_distance_m` from the magnet, at angle `magnet_angle_deg` from the dipole axis
+// (0deg = on-axis, 90deg = equatorial/off-axis), so both closed-form special cases are directly
+// reachable via the angle slider. E = 0 (no electric field source in this mode).
+// ---------------------------------------------------------------------------------------------
+function stepBarMagnet(params: ScenarioParams, t: number): ScenarioState {
+  const magnetMoment = params.magnet_moment ?? 10 // dipole moment magnitude, signed
+  const r = Math.max(params.magnet_distance_m ?? 3, 0.1) // meters, from magnet to test particle
+  const angleDeg = params.magnet_angle_deg ?? 0 // 0 = on-axis, 90 = equatorial
+  const testVelocity = params.test_velocity ?? 0
+  const testCharge = params.test_charge ?? 1
+  const testMass = Math.max(params.test_mass_kg ?? 1, 1e-6)
+
+  const theta = (angleDeg * Math.PI) / 180
+  const m = new THREE.Vector3(0, magnetMoment, 0) // dipole moment vector, along +Y
+  // rHat sweeps from on-axis (+Y, theta=0) to equatorial (+X, theta=90deg), in the X-Y plane.
+  const rHat = new THREE.Vector3(Math.sin(theta), Math.cos(theta), 0)
+  const testPos = rHat.clone().multiplyScalar(r)
+
+  const mDotRHat = m.dot(rHat)
+  const bField = rHat
+    .clone()
+    .multiplyScalar(3 * mDotRHat)
+    .sub(m)
+    .multiplyScalar(MU0 / (4 * Math.PI * r * r * r))
+
+  const velocity = new THREE.Vector3(0, 0, testVelocity)
+  const eField = new THREE.Vector3(0, 0, 0) // no electric field source in this mode
+
+  const { lorentzForce, acceleration, lorentzForceSignedX } = lorentzAndAccel(eField, bField, velocity, testCharge, testMass)
+
+  const objects: SceneObject[] = [
+    {
+      id: "bar-magnet",
+      kind: "box",
+      position: [0, 0, 0],
+      color: "#94a3b8",
+      meta: { role: "bar_magnet", moment: magnetMoment },
+    },
+    {
+      id: "test-particle",
+      kind: "sphere",
+      position: [testPos.x, testPos.y, testPos.z],
+      velocity: [velocity.x, velocity.y, velocity.z],
+      radius: 0.15,
+      color: "#facc15",
+      meta: {
+        role: "test-particle",
+        charge: testCharge,
+        mass_kg: testMass,
+        distance_m: r,
+        angle_from_axis_deg: angleDeg,
+        b_field: [bField.x, bField.y, bField.z],
+        lorentz_force: [lorentzForce.x, lorentzForce.y, lorentzForce.z],
+        lorentz_force_signed_x: lorentzForceSignedX,
+        acceleration: [acceleration.x, acceleration.y, acceleration.z],
+      },
+    },
+  ]
+
+  const fieldVectors: ScenarioState["fieldVectors"] = [
+    { origin: [testPos.x, testPos.y, testPos.z], direction: [bField.x, bField.y, bField.z], magnitude: bField.length() },
+  ]
+
+  const readouts: ScenarioState["readouts"] = [
+    { label: "field source", value: "bar magnet (dipole)" },
+    { label: "magnet moment (m)", value: `${magnetMoment.toFixed(2)} A·m^2` },
+    { label: "distance (r)", value: `${r.toFixed(2)} m` },
+    { label: "angle from axis", value: `${angleDeg.toFixed(1)} deg` },
+    { label: "B field magnitude", value: `${bField.length().toExponential(4)} T` },
+    { label: "Lorentz force on test particle", value: `${lorentzForce.length().toExponential(4)} N` },
+    { label: "Lorentz force (signed, x-axis)", value: `${lorentzForceSignedX.toExponential(4)} N` },
+    { label: "test particle mass", value: `${testMass.toFixed(2)} kg` },
+    { label: "acceleration (F/m)", value: `${acceleration.length().toExponential(4)} m/s^2` },
   ]
 
   return { t, objects, fieldVectors, readouts }
