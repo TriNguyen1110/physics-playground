@@ -1,7 +1,7 @@
 "use client"
 
-import type { MutableRefObject } from "react"
-import { MODULE_META, type ModuleId } from "@/components/modules/types"
+import { useState, type MutableRefObject } from "react"
+import { MODULE_META, type ModuleId, type SliderConfig } from "@/components/modules/types"
 
 /**
  * Sliders are uncontrolled inputs. `onChange` writes straight into the
@@ -24,7 +24,9 @@ export function ControlPanel({
     <div className="pointer-events-auto flex w-72 flex-col gap-4 rounded-2xl border border-white/10 bg-black/50 p-5 backdrop-blur-md shadow-2xl">
       <h2 className="text-xs font-semibold uppercase tracking-wider text-white/50">Controls</h2>
       {sliders.map((s) =>
-        s.kind === "toggle" ? (
+        s.kind === "select" ? (
+          <SelectControl key={s.key} slider={s} paramsRef={paramsRef} accent={accent} />
+        ) : s.kind === "toggle" ? (
           <label key={s.key} className="flex items-center justify-between text-sm text-white/85">
             <span className="font-medium">{s.label}</span>
             <input
@@ -81,6 +83,56 @@ export function ControlPanel({
           Launch
         </button>
       )}
+    </div>
+  )
+}
+
+/**
+ * Renders a discrete mode-index param (e.g. element_type, source_type,
+ * launch_mode) as a labeled button group instead of a bare numeric slider —
+ * "0.00"/"2.00" means nothing to a user, but clicking a labeled button does.
+ * Local `useState` just drives which button looks active; the actual value
+ * still writes straight into `paramsRef` with zero React round-trip, same
+ * as every other control here.
+ */
+function SelectControl({
+  slider,
+  paramsRef,
+  accent,
+}: {
+  slider: SliderConfig
+  paramsRef: MutableRefObject<Record<string, number>>
+  accent: string
+}) {
+  const [active, setActive] = useState(paramsRef.current[slider.key] ?? slider.default)
+  const options = slider.options ?? []
+  return (
+    <div className="flex flex-col gap-1.5 text-sm text-white/85">
+      <span className="font-medium">{slider.label}</span>
+      <div className="flex flex-wrap gap-1.5">
+        {options.map((label, i) => {
+          const isActive = active === i
+          return (
+            <button
+              key={label}
+              type="button"
+              data-testid={`select-${slider.key}-${i}`}
+              onClick={() => {
+                paramsRef.current[slider.key] = i
+                setActive(i)
+              }}
+              className="rounded-lg px-2.5 py-1.5 text-xs font-medium transition-colors"
+              style={
+                isActive
+                  ? { backgroundColor: accent, color: "#05060a" }
+                  : { backgroundColor: "rgba(255,255,255,0.08)", color: "rgba(255,255,255,0.75)" }
+              }
+            >
+              {label}
+            </button>
+          )
+        })}
+      </div>
     </div>
   )
 }

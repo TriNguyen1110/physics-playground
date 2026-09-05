@@ -12,7 +12,14 @@ export type SliderConfig = {
   unit?: string
   // "toggle" renders as a checkbox (0/1) instead of a range input — used
   // for boolean-shaped params like projectiles' drag_enabled.
-  kind?: "range" | "toggle"
+  // "select" renders as a labeled button group instead of a bare numeric
+  // slider — used for discrete mode-index params like light's element_type
+  // or fields' source_type, where "0.00"/"2.00" on a slider is meaningless
+  // to a user but "Slab / Prism / Convex / Concave" as clickable buttons
+  // is immediately legible. `options` gives the label for each integer
+  // value from min to max, in order.
+  kind?: "range" | "toggle" | "select"
+  options?: string[]
 }
 
 export const MODULE_META: Record<
@@ -44,7 +51,16 @@ export const MODULE_META: Record<
       // engine-07: selectable optical element. Default 0 (slab) is byte-identical to the
       // pre-existing engine-05 two-interface path — nothing below this line does anything
       // until element_type is actually changed.
-      { key: "element_type", label: "Element (0 slab/1 prism/2 convex/3 concave)", min: 0, max: 3, step: 1, default: 0 },
+      {
+        key: "element_type",
+        label: "Optical element",
+        min: 0,
+        max: 3,
+        step: 1,
+        default: 0,
+        kind: "select",
+        options: ["Slab", "Prism", "Convex lens", "Concave lens"],
+      },
       { key: "apex_angle_deg", label: "Prism apex angle", min: 10, max: 90, step: 1, default: 60, unit: "°" },
       { key: "R1_m", label: "Lens R1", min: -2, max: 2, step: 0.05, default: 0.5, unit: " m" },
       { key: "R2_m", label: "Lens R2", min: -2, max: 2, step: 0.05, default: -0.5, unit: " m" },
@@ -79,7 +95,16 @@ export const MODULE_META: Record<
       { key: "wall_height", label: "Wall height", min: 0, max: 10, step: 0.25, default: 3, unit: "m" },
       // engine-09: launch_mode default 0 (manual) + azimuth_deg default 0 are both
       // byte-identical no-ops vs. the pre-existing engine-04 default trajectory.
-      { key: "launch_mode", label: "Launch mode (0 manual/1 spring)", min: 0, max: 1, step: 1, default: 0, kind: "toggle" },
+      {
+        key: "launch_mode",
+        label: "Launch mode",
+        min: 0,
+        max: 1,
+        step: 1,
+        default: 0,
+        kind: "select",
+        options: ["Manual speed", "Spring"],
+      },
       { key: "spring_k", label: "Spring constant k", min: 1, max: 2000, step: 1, default: 200, unit: " N/m" },
       { key: "spring_compression_m", label: "Spring compression", min: 0, max: 2, step: 0.05, default: 0.3, unit: " m" },
       { key: "azimuth_deg", label: "Launch azimuth", min: 0, max: 360, step: 1, default: 0, unit: "°" },
@@ -124,7 +149,16 @@ export const MODULE_META: Record<
       { key: "test_mass_kg", label: "Test particle mass", min: 0.1, max: 20, step: 0.1, default: 1, unit: " kg" },
       // engine-08: selectable field source. Default 0 (point_charges) is byte-identical to
       // the pre-existing engine-05/06 path.
-      { key: "source_type", label: "Source (0 charges/1 coil/2 capacitor/3 magnet)", min: 0, max: 3, step: 1, default: 0 },
+      {
+        key: "source_type",
+        label: "Field source",
+        min: 0,
+        max: 3,
+        step: 1,
+        default: 0,
+        kind: "select",
+        options: ["Point charges", "Solenoid coil", "Capacitor", "Bar magnet"],
+      },
       { key: "solenoid_turns_per_m", label: "Solenoid turns/m", min: 10, max: 5000, step: 10, default: 500 },
       { key: "solenoid_current_a", label: "Solenoid current", min: -10, max: 10, step: 0.1, default: 2, unit: " A" },
       { key: "capacitor_voltage_v", label: "Capacitor voltage", min: -1000, max: 1000, step: 5, default: 100, unit: " V" },
