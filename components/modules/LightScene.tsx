@@ -300,7 +300,20 @@ export function LightScene({
         (o) => o.id !== "interface" && o.id !== "interface-2" && !highlightIds.has(o.id)
       )
     : state.objects
-  ).filter((o) => isFiniteVec3(o.position) && isFiniteVec3(o.velocity))
+  )
+    // White-light fix (light-multiray-01 correction): the "incident-ray" leg is the ray BEFORE
+    // it hits the prism's glass, i.e. still the unmixed source beam. lib/physics/light.ts always
+    // colors it via `rayColor` (wavelength_nm's own Bruton-mapped color) since step() only ever
+    // simulates one wavelength per call — real single-wavelength light, correctly colored. But
+    // when the user has explicitly flipped white_light on, that same slider wavelength is just
+    // one of the PRISM_FAN_WAVELENGTHS_NM samples used to build the rainbow fan below, not "the"
+    // color of the light — white light is a mix of all of them, so the pre-glass ray should read
+    // as white/neutral, with only the POST-refraction fan rays (already real per-wavelength
+    // colors) showing the individual spectral hues. Lens mode has no such "mixed before / split
+    // after" framing (a lens doesn't disperse into a visible rainbow the way a prism does), so its
+    // incident ray intentionally keeps the slider-wavelength color regardless of white_light.
+    .map((o) => (isPrism && whiteLightOn && o.id === "incident-ray" ? { ...o, color: "#ffffff" } : o))
+    .filter((o) => isFiniteVec3(o.position) && isFiniteVec3(o.velocity))
 
   const finiteBundleObjects = bundleObjects.filter(
     (o) => isFiniteVec3(o.position) && isFiniteVec3(o.velocity)
