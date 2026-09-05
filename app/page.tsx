@@ -22,11 +22,19 @@ export default function Home() {
   // module tab moves the camera into that module; "Home" pulls it back out
   // to the hub without changing which module's controls/content are active.
   const [cameraView, setCameraView] = useState<CameraView>("hub")
+  // Separate from `module` (which just picks which params/sliders are
+  // "active" so switching back to a room you already visited doesn't reset
+  // it) — this specifically gates whether any room's 3D content renders at
+  // all. Starts false so a fresh page load shows only the hallway/hub, not
+  // Light's content pre-selected underneath it; flips true permanently on
+  // the first module pick, same as `module` from then on.
+  const [hasEnteredRoom, setHasEnteredRoom] = useState(false)
   const [readouts, setReadouts] = useState<ScenarioState["readouts"]>([])
 
   const selectModule = useCallback((m: ModuleId) => {
     setModule(m)
     setCameraView(m)
+    setHasEnteredRoom(true)
   }, [])
 
   const goHome = useCallback(() => {
@@ -54,7 +62,13 @@ export default function Home() {
         gl={{ antialias: true }}
         dpr={[1, 2]}
       >
-        <Scene module={module} cameraView={cameraView} paramsRef={activeParamsRef} onReadouts={onReadouts} />
+        <Scene
+          module={module}
+          cameraView={cameraView}
+          showRoomContent={hasEnteredRoom}
+          paramsRef={activeParamsRef}
+          onReadouts={onReadouts}
+        />
       </Canvas>
 
       <div className="pointer-events-none absolute inset-0 flex flex-col justify-between p-6">
@@ -62,7 +76,8 @@ export default function Home() {
           <div className="flex flex-col items-start gap-2">
             <div className="pointer-events-auto">
               <h1 className="text-sm font-semibold tracking-wide text-white/70">
-                Physics Playground <span className="text-white/30">/ {meta.label}</span>
+                Physics Playground{" "}
+                <span className="text-white/30">/ {hasEnteredRoom ? meta.label : "Hallway"}</span>
               </h1>
             </div>
             <SponsorCredits />
@@ -76,14 +91,16 @@ export default function Home() {
             >
               Home
             </button>
-            <ModuleSwitcher active={module} onSelect={selectModule} />
+            <ModuleSwitcher active={hasEnteredRoom ? module : null} onSelect={selectModule} />
           </div>
         </div>
 
-        <div className="flex items-end justify-between gap-4">
-          <ControlPanel module={module} paramsRef={activeParamsRef} accent={meta.accent} />
-          <ReadoutCard title={meta.label} readouts={readouts} accent={meta.accent} />
-        </div>
+        {hasEnteredRoom && (
+          <div className="flex items-end justify-between gap-4">
+            <ControlPanel module={module} paramsRef={activeParamsRef} accent={meta.accent} />
+            <ReadoutCard title={meta.label} readouts={readouts} accent={meta.accent} />
+          </div>
+        )}
       </div>
     </div>
   )

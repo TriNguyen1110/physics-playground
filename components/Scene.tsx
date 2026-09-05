@@ -28,6 +28,7 @@ const RIM_LIGHT_COLOR: Record<ModuleId, string> = {
 export function Scene({
   module,
   cameraView,
+  showRoomContent,
   paramsRef,
   onReadouts,
 }: {
@@ -37,6 +38,12 @@ export function Scene({
   // "Home" button can pull the camera back out to the hub overview without
   // tearing down/changing the active module's content underneath it.
   cameraView: CameraView
+  // Whether any room's 3D content should render at all. False on a fresh
+  // page load (still standing in the hallway, no room picked yet) even
+  // though `module` already has some default value for the params/UI
+  // plumbing — without this, Light's rays/objects would render underneath
+  // the hub camera before the user ever chose a room.
+  showRoomContent: boolean
   paramsRef: MutableRefObject<ScenarioParams>
   onReadouts: (r: ScenarioState["readouts"]) => void
 }) {
@@ -86,9 +93,11 @@ export function Scene({
 
       <ContactShadows position={[0, -0.16, 0]} opacity={0.35} scale={30} blur={2.5} far={10} color="#000000" />
 
-      {module === "light" && <LightScene paramsRef={paramsRef} onReadouts={onReadouts} />}
-      {module === "fields" && <FieldsScene paramsRef={paramsRef} onReadouts={onReadouts} />}
-      {module === "projectiles" && <ProjectilesScene paramsRef={paramsRef} onReadouts={onReadouts} />}
+      {showRoomContent && module === "light" && <LightScene paramsRef={paramsRef} onReadouts={onReadouts} />}
+      {showRoomContent && module === "fields" && <FieldsScene paramsRef={paramsRef} onReadouts={onReadouts} />}
+      {showRoomContent && module === "projectiles" && (
+        <ProjectilesScene paramsRef={paramsRef} onReadouts={onReadouts} />
+      )}
     </>
   )
 }

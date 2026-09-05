@@ -4,7 +4,15 @@ import { MODULE_META, type ModuleId } from "@/components/modules/types"
 
 const ORDER: ModuleId[] = ["light", "projectiles", "fields"]
 
-export function ModuleSwitcher({ active, onSelect }: { active: ModuleId; onSelect: (m: ModuleId) => void }) {
+export function ModuleSwitcher({
+  active,
+  onSelect,
+}: {
+  // `null` means no room has been entered yet (fresh load, still in the
+  // hallway) — no tab should read as active in that state.
+  active: ModuleId | null
+  onSelect: (m: ModuleId) => void
+}) {
   return (
     <div className="pointer-events-auto flex gap-2 rounded-full border border-white/10 bg-black/50 p-1.5 backdrop-blur-md shadow-2xl">
       {ORDER.map((m) => {
