@@ -81,6 +81,208 @@ export function step(params: ScenarioParams, t: number): ScenarioState {
 }
 
 // ---------------------------------------------------------------------------------------------
+// stepTrajectory(params, t) — fields-play-01: a real "press play" animation of the test
+// particle's actual position/velocity over time under the Lorentz force, instead of the static
+// fixed-position readout `step()` above always shows. Deliberately a SEPARATE export, not a
+// change to `step()`'s signature/behavior (CONTRACT.md/engine.md: `step()` is frozen and
+// `FieldsScene.tsx` already depends on its exact current shape) — `stepTrajectory` returns the
+// same `ScenarioState` shape, so `scene` can drop it in as `useLiveScenario(fieldsTrajectoryStep,
+// paramsRef)` or call it per-frame with increasing `t`, exactly like `ProjectilesScene.tsx`
+// already does with its own `step()`.
+//
+// Still a PURE function of (params, t): no module-level mutable state, no Date.now(). It
+// re-integrates from t=0 every call via RK4 (see `integrateTrajectory` below) rather than
+// carrying hidden per-frame state, so it stays independently testable the same way `step()` is.
+//
+// All four `source_type`s work: `fieldAtPosition` below re-derives E/B at whatever position the
+// particle has moved to (point_charges/bar_magnet fields genuinely vary with position; solenoid/
+// capacitor stay uniform but go through the same generic path for one shared integrator).
+export function stepTrajectory(params: ScenarioParams, t: number): ScenarioState {
+  const sourceType = resolveSourceType(params.source_type)
+  const base = step(params, t)
+
+  const testCharge = params.test_charge ?? 1
+  const testMass = Math.max(params.test_mass_kg ?? 1, 1e-6)
+
+  const { position, velocity } = integrateTrajectory(sourceType, params, Math.max(t, 0))
+  const { E, B } = fieldAtPosition(sourceType, params, position)
+  const { lorentzForce, acceleration, lorentzForceSignedX } = lorentzAndAccel(E, B, velocity, testCharge, testMass)
+
+  const objects: SceneObject[] = base.objects.map((o) =>
+    o.id === "test-particle"
+      ? {
+          ...o,
+          position: [position.x, position.y, position.z],
+          velocity: [velocity.x, velocity.y, velocity.z],
+          meta: {
+            ...o.meta,
+            lorentz_force: [lorentzForce.x, lorentzForce.y, lorentzForce.z],
+            lorentz_force_signed_x: lorentzForceSignedX,
+            acceleration: [acceleration.x, acceleration.y, acceleration.z],
+          },
+        }
+      : o,
+  )
+
+  const readouts: ScenarioState["readouts"] = [
+    ...base.readouts,
+    {
+      label: "trajectory position",
+      value: `(${position.x.toFixed(3)}, ${position.y.toFixed(3)}, ${position.z.toFixed(3)}) m`,
+    },
+    { label: "trajectory speed", value: `${velocity.length().toFixed(3)} m/s` },
+  ]
+
+  return { t, objects, fieldVectors: base.fieldVectors, readouts }
+}
+
+// Same t=0 test-particle position/velocity each `stepXxx` function already uses, factored out so
+// the trajectory integrator and `fieldAtPosition` share one source of truth for "where does the
+// particle start" per source_type.
+function initialTestState(sourceType: SourceType, params: ScenarioParams): { position: THREE.Vector3; velocity: THREE.Vector3 } {
+  const testVelocity = params.test_velocity ?? 0
+  const velocity = new THREE.Vector3(0, 0, testVelocity)
+
+  if (sourceType === "bar_magnet") {
+    const r = Math.max(params.magnet_distance_m ?? 3, 0.1)
+    const angleDeg = params.magnet_angle_deg ?? 0
+    const theta = (angleDeg * Math.PI) / 180
+    const rHat = new THREE.Vector3(Math.sin(theta), Math.cos(theta), 0)
+    return { position: rHat.multiplyScalar(r), velocity }
+  }
+
+  return { position: new THREE.Vector3(0, 0, 0), velocity }
+}
+
+// E and B fields at an ARBITRARY position (not just the fixed t=0 test-particle spot) — the same
+// per-source-type formulas as the `stepXxx` functions above, generalized so the trajectory
+// integrator can re-evaluate the field as the particle actually moves through it.
+function fieldAtPosition(sourceType: SourceType, params: ScenarioParams, pos: THREE.Vector3): { E: THREE.Vector3; B: THREE.Vector3 } {
+  if (sourceType === "solenoid") {
+    const n = Math.max(params.solenoid_turns_per_m ?? 500, 0)
+    const current = params.solenoid_current_a ?? 2
+    const bMag = MU0 * n * current
+    return { E: new THREE.Vector3(0, 0, 0), B: new THREE.Vector3(0, bMag, 0) }
+  }
+
+  if (sourceType === "capacitor") {
+    const voltage = params.capacitor_voltage_v ?? 100
+    const d = Math.max(params.capacitor_separation_m ?? 0.1, 1e-3)
+    const eMag = voltage / d
+    return { E: new THREE.Vector3(eMag, 0, 0), B: new THREE.Vector3(0, 0, 0) }
+  }
+
+  if (sourceType === "bar_magnet") {
+    const magnetMoment = params.magnet_moment ?? 10
+    const m = new THREE.Vector3(0, magnetMoment, 0)
+    const r = Math.max(pos.length(), 1e-3)
+    const rHat = pos.clone().normalize()
+    const mDotRHat = m.dot(rHat)
+    const bField = rHat
+      .clone()
+      .multiplyScalar(3 * mDotRHat)
+      .sub(m)
+      .multiplyScalar(MU0 / (4 * Math.PI * r * r * r))
+    return { E: new THREE.Vector3(0, 0, 0), B: bField }
+  }
+
+  // point_charges (default)
+  const q1 = params.charge1 ?? 3
+  const q2 = params.charge2 ?? -3
+  const q3 = params.charge3 ?? 0
+  const separation = Math.max(params.separation ?? 5, 0.1)
+  const charge3Offset = Math.max(params.charge3_offset ?? 3, 0.1)
+  const bFieldMag = params.b_field ?? 0
+
+  const pos1 = new THREE.Vector3(-separation / 2, 0, 0)
+  const pos2 = new THREE.Vector3(separation / 2, 0, 0)
+  const pos3 = new THREE.Vector3(0, 0, charge3Offset)
+
+  const e1 = fieldAt(pos, pos1, q1)
+  const e2 = fieldAt(pos, pos2, q2)
+  const e3 = fieldAt(pos, pos3, q3)
+  const eTotal = e1.clone().add(e2).add(e3)
+
+  return { E: eTotal, B: new THREE.Vector3(0, bFieldMag, 0) }
+}
+
+// Numerically integrates the test particle's position/velocity from t=0 to `tEnd` under the real
+// Lorentz force F = q(E + v x B), a = F/m, via classic RK4 (4th-order Runge-Kutta) on the coupled
+// (position, velocity) ODE system. RK4 (rather than semi-implicit/symplectic Euler) is used
+// because it's dramatically more accurate per step for the oscillatory cyclotron motion this
+// verifies against below — a single-Euler step's error compounds every revolution and visibly
+// spirals the radius in/out over a few periods, which RK4 at >=360 substeps/revolution does not.
+//
+// Timestep is adaptive: if a nonzero B field exists, dt is sized to the particle's own cyclotron
+// period (2*pi*m/(|q|*B)) so a fast-spinning particle in a strong field still gets enough
+// sub-steps per revolution regardless of the requested `tEnd`; total sub-steps are capped so a
+// single call with a very large `t` degrades to a coarser (but still bounded-cost) dt instead of
+// looping unboundedly.
+function integrateTrajectory(sourceType: SourceType, params: ScenarioParams, tEnd: number): { position: THREE.Vector3; velocity: THREE.Vector3 } {
+  const testCharge = params.test_charge ?? 1
+  const testMass = Math.max(params.test_mass_kg ?? 1, 1e-6)
+  const { position: p0, velocity: v0 } = initialTestState(sourceType, params)
+
+  if (tEnd <= 0) return { position: p0, velocity: v0 }
+
+  const { B: b0 } = fieldAtPosition(sourceType, params, p0)
+  const bMag = b0.length()
+  const omega = (Math.abs(testCharge) * bMag) / testMass
+  const cyclotronPeriod = omega > 1e-12 ? (2 * Math.PI) / omega : Infinity
+
+  const SUBSTEPS_PER_REVOLUTION = 360
+  const NO_FIELD_SUBSTEPS = 500
+  let dt = Number.isFinite(cyclotronPeriod) ? cyclotronPeriod / SUBSTEPS_PER_REVOLUTION : tEnd / NO_FIELD_SUBSTEPS
+  if (!(dt > 0) || !Number.isFinite(dt)) dt = tEnd / NO_FIELD_SUBSTEPS
+
+  const MAX_STEPS = 20000
+  let steps = Math.max(1, Math.ceil(tEnd / dt))
+  if (steps > MAX_STEPS) {
+    steps = MAX_STEPS
+    dt = tEnd / steps
+  }
+
+  const accelAt = (pos: THREE.Vector3, vel: THREE.Vector3) => {
+    const { E, B } = fieldAtPosition(sourceType, params, pos)
+    const vCrossB = vel.clone().cross(B)
+    return E.clone().add(vCrossB).multiplyScalar(testCharge).divideScalar(testMass)
+  }
+
+  let pos = p0.clone()
+  let vel = v0.clone()
+
+  for (let i = 0; i < steps; i++) {
+    const k1v = accelAt(pos, vel)
+    const k1p = vel.clone()
+
+    const k2v = accelAt(pos.clone().addScaledVector(k1p, dt / 2), vel.clone().addScaledVector(k1v, dt / 2))
+    const k2p = vel.clone().addScaledVector(k1v, dt / 2)
+
+    const k3v = accelAt(pos.clone().addScaledVector(k2p, dt / 2), vel.clone().addScaledVector(k2v, dt / 2))
+    const k3p = vel.clone().addScaledVector(k2v, dt / 2)
+
+    const k4v = accelAt(pos.clone().addScaledVector(k3p, dt), vel.clone().addScaledVector(k3v, dt))
+    const k4p = vel.clone().addScaledVector(k3v, dt)
+
+    pos = pos
+      .clone()
+      .addScaledVector(k1p, dt / 6)
+      .addScaledVector(k2p, dt / 3)
+      .addScaledVector(k3p, dt / 3)
+      .addScaledVector(k4p, dt / 6)
+
+    vel = vel
+      .clone()
+      .addScaledVector(k1v, dt / 6)
+      .addScaledVector(k2v, dt / 3)
+      .addScaledVector(k3v, dt / 3)
+      .addScaledVector(k4v, dt / 6)
+  }
+
+  return { position: pos, velocity: vel }
+}
+
+// ---------------------------------------------------------------------------------------------
 // source_type = "point_charges" (default) — UNCHANGED from engine-05/06, extracted verbatim into
 // its own function so the default path stays byte-identical (zero regression).
 // ---------------------------------------------------------------------------------------------
