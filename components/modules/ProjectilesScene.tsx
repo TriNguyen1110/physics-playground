@@ -42,6 +42,12 @@ const WALL2_HEIGHT_M = 2.2
 // low, fast shot deflects upward off it instead of just skimming the
 // ground — a second kind of "aha" (deflection) distinct from the
 // clears-vs-hits-wall one. Fixed position/tilt, not slider-driven.
+//
+// Downrange (x) obstacle-course ordering, closest to farthest from launch:
+// ramp (6) -> primary slider-driven wall (default 12, range [2,40]) ->
+// platform (16) -> second fixed wall (24). Kept in this order (rather than
+// the previous scattered/arbitrary x-values each obstacle was added with)
+// so the scene reads as one intentional course instead of a pile of props.
 const RAMP_DISTANCE_M = 6
 const RAMP_TILT_DEG = 18
 const RAMP_SIZE: [number, number, number] = [2.4, 0.25, 3]
@@ -51,9 +57,15 @@ const RAMP_SIZE: [number, number, number] = [2.4, 0.25, 3]
 // (which deflects) — this one is meant to be landed ON. Fixed, not
 // slider-driven, positioned further out than the ramp so a mid-range shot
 // can clear the first wall and land on the platform instead of the ground.
+// PLATFORM_HEIGHT_M is the height of its TOP (landing) surface above
+// GROUND_SURFACE_Y — deliberately elevated (not ground-level like the ramp)
+// so landing on it reads as a distinct "aha" from resting on the ground; a
+// purely cosmetic support pillar (no collider, doesn't touch Rapier setup)
+// fills the visual gap underneath so it doesn't read as floating/disconnected.
 const PLATFORM_DISTANCE_M = 16
 const PLATFORM_HEIGHT_M = 1.6
 const PLATFORM_SIZE: [number, number, number] = [3.2, 0.35, 4.5]
+const PLATFORM_PILLAR_SIZE: [number, number] = [0.5, 0.5]
 
 // projectiles-multiball-platforms-01: instead of one ball that gets reset on
 // every Launch click, each click spawns a NEW ball so different launches can
@@ -388,11 +400,28 @@ export const ProjectilesScene = memo(function ProjectilesScene({
           point — a low, fast shot can clip it and get deflected upward
           instead of just skimming the ground, a distinct "aha" from
           clearing/hitting a vertical wall. Rotated about Z so its face
-          tilts toward the incoming ball. */}
+          tilts toward the incoming ball.
+
+          Bug fix (screenshot-confirmed floating/clipping): the box's own
+          center was previously hardcoded to y=0.3 regardless of tilt, which
+          floats the high (uphill) end above the ground while clipping the
+          low (downhill) end below it. Since the box is rotated about Z, its
+          lowest world-space corner after rotation is offset from center by
+          halfX*sin(tilt) + halfY*cos(tilt) (worst-case corner of a rotated
+          rectangle) — anchoring the center at GROUND_SURFACE_Y plus that
+          offset puts the ramp's downhill edge exactly on the ground, same
+          "sits on the ground plane" bar as every other ground-relative
+          object here, just accounting for the rotation. */}
       <RigidBody
         type="fixed"
         colliders={false}
-        position={[RAMP_DISTANCE_M, 0.3, 0]}
+        position={[
+          RAMP_DISTANCE_M,
+          GROUND_SURFACE_Y +
+            (RAMP_SIZE[0] / 2) * Math.sin(THREE.MathUtils.degToRad(RAMP_TILT_DEG)) +
+            (RAMP_SIZE[1] / 2) * Math.cos(THREE.MathUtils.degToRad(RAMP_TILT_DEG)),
+          0,
+        ]}
         rotation={[0, 0, THREE.MathUtils.degToRad(RAMP_TILT_DEG)]}
       >
         <CuboidCollider args={[RAMP_SIZE[0] / 2, RAMP_SIZE[1] / 2, RAMP_SIZE[2] / 2]} restitution={0.6} friction={0.3} />
@@ -413,8 +442,23 @@ export const ProjectilesScene = memo(function ProjectilesScene({
           horizontal platform further downrange than the ramp — something a
           ball can land and rest ON, distinct from the ramp's deflection and
           the walls' block-or-clear. High friction/moderate restitution so a
-          landing ball settles instead of bouncing forever. */}
-      <RigidBody type="fixed" colliders={false} position={[PLATFORM_DISTANCE_M, PLATFORM_HEIGHT_M, 0]}>
+          landing ball settles instead of bouncing forever.
+
+          Bug fix (screenshot-confirmed floating): the box's own center was
+          previously set to y=PLATFORM_HEIGHT_M directly (its TOP surface
+          height, not center), leaving it floating ~1.4m above the ground
+          with nothing connecting it — same class of bug as the ramp above.
+          Center is now derived so the TOP surface still lands exactly at
+          GROUND_SURFACE_Y + PLATFORM_HEIGHT_M (same visual landing height as
+          before), and a purely cosmetic support pillar (no collider — does
+          not touch the collision/Rapier setup) fills the gap down to the
+          ground so the platform reads as a structure standing on the
+          ground plane instead of a disconnected floating slab. */}
+      <RigidBody
+        type="fixed"
+        colliders={false}
+        position={[PLATFORM_DISTANCE_M, GROUND_SURFACE_Y + PLATFORM_HEIGHT_M - PLATFORM_SIZE[1] / 2, 0]}
+      >
         <CuboidCollider
           args={[PLATFORM_SIZE[0] / 2, PLATFORM_SIZE[1] / 2, PLATFORM_SIZE[2] / 2]}
           restitution={0.35}
@@ -430,6 +474,20 @@ export const ProjectilesScene = memo(function ProjectilesScene({
           }}
         />
       </RigidBody>
+      {/* Cosmetic-only support pillar under the platform (no collider) —
+          purely visual ground connection, see bug-fix note above. */}
+      <mesh
+        position={[
+          PLATFORM_DISTANCE_M,
+          GROUND_SURFACE_Y + (PLATFORM_HEIGHT_M - PLATFORM_SIZE[1]) / 2,
+          0,
+        ]}
+        receiveShadow
+        castShadow
+      >
+        <boxGeometry args={[PLATFORM_PILLAR_SIZE[0], PLATFORM_HEIGHT_M - PLATFORM_SIZE[1], PLATFORM_PILLAR_SIZE[1]]} />
+        <meshStandardMaterial color="#1c1e29" emissive={PALETTE.silver} emissiveIntensity={0.25} roughness={0.8} metalness={0.2} />
+      </mesh>
 
       {/* Resting preview: always visible at the current launch point,
           reflecting whatever the sliders currently read (radius/position),
