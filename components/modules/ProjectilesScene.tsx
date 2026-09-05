@@ -369,13 +369,38 @@ export const ProjectilesScene = memo(function ProjectilesScene({
   // readout it was launched with instead of Rapier quietly simulating a
   // vacuum, or a later slider change retroactively changing an
   // already-flying ball's drag.
-  useFrame(() => {
+  //
+  // Bug fix (user-reported: "turning on air drag makes the balls oscillate
+  // in 1 point"): the original approach called `body.addForce({x: -k*v.x,
+  // ...})` every frame, which Rapier integrates as an explicit-Euler step —
+  // v_next = v * (1 - (k/m)*dt). That update is only stable while
+  // (k/m)*dt < 2; push past that (e.g. radius_m near its [0.01,1] max ->
+  // k = DRAG_COEFFICIENT(2.5)*radius_m up to 2.5, combined with mass_kg
+  // near its [0.1,50] min) and each step overshoots zero and FLIPS the
+  // velocity's sign, so the ball never settles into a decaying arc — it
+  // visibly vibrates back and forth around whatever point it was at when
+  // drag "won", which is exactly the reported symptom. `addForce` also has
+  // no way to know our intent is "decay toward zero, never past it," so it
+  // can't self-correct.
+  // Fix: skip Rapier's force accumulator entirely and apply the SAME exact
+  // closed-form decay this module's own engine already uses for its tau
+  // math (lib/physics/projectiles.ts: tau = mass_kg / k, v(t) = v0 *
+  // exp(-t/tau)) directly to the body's linear velocity via `setLinvel`.
+  // `Math.exp(-x)` is in (0, 1] for every x >= 0 — there is no k/m/dt
+  // combination that can make this overshoot past zero or flip sign, so
+  // it's unconditionally stable regardless of how high radius_m/dragK gets
+  // or how large a single frame's delta is (e.g. a dropped/slow frame).
+  // Gravity is untouched here — Rapier's own solver still integrates that
+  // separately on its own fixed step, exactly as before; this only removes
+  // this frame's drag-attributable share of velocity.
+  useFrame((_state, delta) => {
     for (const ball of balls) {
       if (!ball.dragEnabled || ball.dragK <= 0) continue
       const body = bodyRefs.current.get(ball.id)
       if (!body) continue
       const v = body.linvel()
-      body.addForce({ x: -ball.dragK * v.x, y: -ball.dragK * v.y, z: -ball.dragK * v.z }, true)
+      const decay = Math.exp((-ball.dragK / ball.mass) * delta)
+      body.setLinvel({ x: v.x * decay, y: v.y * decay, z: v.z * decay }, true)
     }
   })
 
