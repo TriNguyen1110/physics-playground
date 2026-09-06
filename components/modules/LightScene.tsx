@@ -665,6 +665,47 @@ export function LightScene({
     if (valueEl) valueEl.textContent = next.toFixed(2)
   }, [isGlassElement, paramsRef])
 
+  // Bug fix (light-multiray-01/crud-light-01 correction, user screenshot-flagged "the concave
+  // lens physics is wrong"): R1_m/R2_m are ONE shared slider pair (types.ts default: R1_m=0.5,
+  // R2_m=-0.5 — the biconvex/converging shape). Switching element_type between convex_lens(2)
+  // and concave_lens(3) only changes the UI LABEL/role ("concave (diverging)") — it never
+  // actually swapped R1_m/R2_m to the biconcave shape, so a user selecting "concave lens" kept
+  // getting the converging biconvex curvature pair, exactly like the n2-glass-index bug above.
+  // Per BOARD.tsv's light.lens.params fact (engine-07): "default biconvex(0.5,-0.5) for
+  // convex_lens / biconcave(-0.5,0.5) for concave_lens" — this swap was never implemented. Same
+  // transition-only pattern as the n2 fix above: track the current lens shape bucket
+  // ("convex"/"concave"/"other"), and only on the edge where it actually changes INTO convex or
+  // concave, snap R1_m/R2_m to that shape's default — but only when the current values still
+  // look like the OTHER shape's untouched default (or already match the target, a harmless
+  // no-op), never stomping a value the user deliberately customized.
+  const lensShapeOf = (r: string) => (r === "convex-lens" ? "convex" : r === "concave-lens" ? "concave" : "other")
+  const lensShapeRef = useRef<"convex" | "concave" | "other">(lensShapeOf(role))
+  useEffect(() => {
+    const currentShape = lensShapeOf(role)
+    if (lensShapeRef.current === currentShape) return
+    lensShapeRef.current = currentShape
+    if (currentShape === "other") return // leaving lens mode entirely — R1/R2 have no
+    // slab/prism-appropriate value to restore to (unlike n2, which doubles as slab's real air
+    // index), so nothing to fix up on the way out.
+    const target = currentShape === "convex" ? { R1: 0.5, R2: -0.5 } : { R1: -0.5, R2: 0.5 }
+    const otherShapeDefault = currentShape === "convex" ? { R1: -0.5, R2: 0.5 } : { R1: 0.5, R2: -0.5 }
+    const curR1 = paramsRef.current.R1_m
+    const curR2 = paramsRef.current.R2_m
+    const looksLike = (v: { R1: number; R2: number }) =>
+      Math.abs(curR1 - v.R1) < 1e-6 && Math.abs(curR2 - v.R2) < 1e-6
+    if (!looksLike(otherShapeDefault) && !looksLike(target)) return // user's own custom R1/R2 — leave it alone
+    paramsRef.current = { ...paramsRef.current, R1_m: target.R1, R2_m: target.R2 }
+    // Mirror the n2 fix's DOM-write: R1_m/R2_m sliders are uncontrolled <input type="range">
+    // elements too, so a programmatic paramsRef write alone never moves the visible
+    // thumb/readout — locate each via its own data-slider-value readout span.
+    for (const [key, value] of [["R1_m", target.R1], ["R2_m", target.R2]] as const) {
+      const valueEl = document.querySelector<HTMLElement>(`[data-slider-value="${key}"]`)
+      const input = valueEl?.closest("label")?.querySelector<HTMLInputElement>('input[type="range"]')
+      if (input) input.value = String(value)
+      if (valueEl) valueEl.textContent = value.toFixed(2)
+    }
+  }, [role, paramsRef])
+
   // The current slider-selected ray, pulled out of the single-call `state` so it can be drawn
   // thicker/highlighted among the multi-ray bundle below rather than getting lost in the fan.
   // Prism: the post-first-face rays are where dispersion is visible. Lens: the incident +
