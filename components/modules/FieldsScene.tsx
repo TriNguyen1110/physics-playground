@@ -181,6 +181,40 @@ export function FieldsScene({
     ]
   }, [isPointCharges, state.fieldVectors, trajectoryParticle])
 
+  // fields-other-sources-accuracy-01: SAME bug class as the point_charges fix above, checked and
+  // confirmed present ONLY for bar_magnet. `state.fieldVectors[0]` for solenoid/capacitor is a
+  // uniform field (B = mu0*n*I everywhere in the coil; E = V/d everywhere between the idealized
+  // infinite plates — see lib/physics/fields.ts's stepSolenoid/stepCapacitor, no position term at
+  // all) filling a fixed spatial region, not a value "at the particle" — so SolenoidFieldLines/
+  // CapacitorFieldLines staying anchored to the coil/plate geometry regardless of where the
+  // animated particle drifts is already correct, not a bug, and is left untouched. bar_magnet's
+  // B = (mu0/4pi)*(3*(m.rhat)*rhat - m)/r^3 (stepBarMagnet) genuinely varies with position, and
+  // `state.fieldVectors[0]`'s origin/direction/magnitude are all evaluated ONLY at the test
+  // particle's static t=0 position (`initialTestState`) — while test_velocity defaults to a
+  // nonzero 5 m/s even in this mode (components/modules/types.ts), so v x B is nonzero at
+  // defaults and stepTrajectory's RK4 integration genuinely drifts the particle away from that
+  // start point through the highly non-uniform dipole field. The arrow stayed pinned at the
+  // stale start position/value exactly like the point-charges bug. Fix: same pattern — override
+  // origin with the live animated position, and direction/magnitude with stepTrajectory's own
+  // already-recomputed-at-that-position `lorentz_force` (no second field calc here; `fieldAtPosition`
+  // in lib/physics/fields.ts isn't exported for scene to call anyway). Falls back to the original
+  // static vector when the instantaneous force is ~0 (e.g. before trajectoryParticle is set, or if
+  // sliders are tuned to zero velocity/moment) so the arrow doesn't collapse to a zero-length arrow
+  // at moments the force is momentarily near zero.
+  const liveMagnetVector = useMemo(() => {
+    const staticVector = state.fieldVectors?.[0]
+    if (!staticVector || sourceLabel !== "bar magnet (dipole)" || !trajectoryParticle) return staticVector
+    const force = new THREE.Vector3(...trajectoryParticle.force)
+    const forceMag = force.length()
+    const direction: Vec3 = forceMag > 1e-9 ? [force.x, force.y, force.z] : staticVector.direction
+    return {
+      ...staticVector,
+      origin: trajectoryParticle.position,
+      direction,
+      magnitude: forceMag > 1e-9 ? forceMag : staticVector.magnitude,
+    }
+  }, [state.fieldVectors, sourceLabel, trajectoryParticle])
+
   const objects = useMemo<SceneObject[]>(
     () =>
       state.objects
@@ -265,11 +299,13 @@ export function FieldsScene({
         <CapacitorFieldLines vector={state.fieldVectors[0]} />
       )}
 
-      {/* source_type=3 (bar magnet): a single scaled arrow at the test particle's actual position
-          showing the local dipole field there (real log-scaled length, not the shared renderer's
-          self-normalized-to-1 arrow). */}
-      {!isPointCharges && sourceLabel === "bar magnet (dipole)" && state.fieldVectors?.[0] && (
-        <MagnetFieldArrow vector={state.fieldVectors[0]} />
+      {/* source_type=3 (bar magnet): a single scaled arrow at the test particle's actual,
+          CONTINUOUSLY ANIMATED position (see liveMagnetVector above — the dipole field genuinely
+          varies with position, so unlike solenoid/capacitor this one must track the moving
+          particle) showing the local force there (real log-scaled length, not the shared
+          renderer's self-normalized-to-1 arrow). */}
+      {!isPointCharges && sourceLabel === "bar magnet (dipole)" && liveMagnetVector && (
+        <MagnetFieldArrow vector={liveMagnetVector} />
       )}
     </group>
   )
@@ -386,11 +422,17 @@ function CapacitorFieldLines({ vector }: { vector: FieldVec }) {
   )
 }
 
-// Single arrow at the test particle's real (source_type=3) position, length real-magnitude-driven
-// via the shared log mapping rather than the shared FieldVectorRenderer's self-normalized-to-1
-// scale (which can never show a real magnitude change when there's only one vector in the array).
+// Single arrow at the test particle's real, live-animated (source_type=3) position, length
+// real-magnitude-driven via the shared log mapping rather than the shared FieldVectorRenderer's
+// self-normalized-to-1 scale (which can never show a real magnitude change when there's only one
+// vector in the array). `vector.magnitude` is now the Lorentz FORCE (Newtons) at the particle's
+// current position, not the raw B field (Tesla) as before liveMagnetVector's fix above — refScale
+// re-tuned accordingly: default params (moment=10, r=3, on-axis, v=5 m/s) give |F| = q|v x B| ~=
+// 3.7e-7 N (B ~= 7.4e-8 T there * v=5 * q=1), so refScale is set to that default force magnitude
+// (was 7e-8, tuned for the old B-field-in-Tesla semantic) so the default case still renders
+// mid-range instead of pegged at a clamp bound.
 function MagnetFieldArrow({ vector }: { vector: FieldVec }) {
-  const length = magToLength(vector.magnitude, 7e-8)
+  const length = magToLength(vector.magnitude, 3.7e-7)
   const arrow: SceneObject = {
     id: "magnet-field-arrow",
     kind: "arrow",
