@@ -98,7 +98,9 @@ export function FieldsScene({
   // `trajectoryParticle` is the only thing read from `stepTrajectory` here — the source objects
   // (charges/coil/plates/magnet) still come from the static `fieldsStep` call above, unchanged.
   const elapsedRef = useRef(0)
-  const [trajectoryParticle, setTrajectoryParticle] = useState<{ position: Vec3; velocity: Vec3 } | null>(null)
+  const [trajectoryParticle, setTrajectoryParticle] = useState<{ position: Vec3; velocity: Vec3; force: Vec3 } | null>(
+    null
+  )
 
   useFrame((_, delta) => {
     elapsedRef.current += delta
@@ -109,6 +111,12 @@ export function FieldsScene({
       setTrajectoryParticle({
         position: particle.position,
         velocity: (particle.velocity as Vec3) ?? [0, 0, 0],
+        // fields-play-01-fix: `lorentz_force` here is ALREADY recomputed by stepTrajectory at
+        // the particle's CURRENT (animated) position (see fieldAtPosition/lorentzAndAccel in
+        // lib/physics/fields.ts) — reused directly below instead of hand-rolling a second field
+        // calculation, so the field-vector arrow tracks both the particle's moving origin AND
+        // its position-dependent magnitude/direction, not just the origin.
+        force: (particle.meta?.lorentz_force as Vec3) ?? [0, 0, 0],
       })
     }
   })
@@ -139,6 +147,39 @@ export function FieldsScene({
   // can carry a TransformControls gizmo; test-particle stays in the generic path since it has no
   // param to drag back into (see limit #3 above).
   const draggableIds = ["charge-1", "charge-2", "charge-3"]
+
+  // fields-play-01-fix (real bug, user-reported): "why is the white dot moving around the
+  // particles and why is its arrow staying at the same place." `state.fieldVectors[0]` is the
+  // "net field/force AT THE TEST PARTICLE" entry (see BOARD.tsv fact fields.meta ordering:
+  // [at test particle, force on charge-1, force on charge-2, force on charge-3]) but it comes
+  // from the STATIC `fieldsStep` call, which always evaluates at the test particle's fixed t=0
+  // starting position (`initialTestState` in lib/physics/fields.ts) — never the position the
+  // continuous `stepTrajectory` animation above actually moved the white dot to. So the arrow
+  // stayed anchored at start while the dot orbited away from it.
+  // Fix: override ONLY that first entry's origin with the animated `trajectoryParticle.position`
+  // (same value already driving the white dot), and its direction/magnitude with the ALREADY
+  // correctly-recomputed-at-that-position `lorentz_force` stepTrajectory returns (captured
+  // above) rather than re-deriving E/B by hand here. Entries 1+ (force on the static source
+  // charges) are left untouched — those charges don't move, so their existing static
+  // origin/vector is already correct.
+  const liveFieldVectors = useMemo(() => {
+    if (!isPointCharges || !state.fieldVectors || state.fieldVectors.length === 0 || !trajectoryParticle) {
+      return state.fieldVectors
+    }
+    const [testParticleVector, ...sourceVectors] = state.fieldVectors
+    const force = new THREE.Vector3(...trajectoryParticle.force)
+    const forceMag = force.length()
+    const direction: Vec3 = forceMag > 1e-9 ? [force.x, force.y, force.z] : testParticleVector.direction
+    return [
+      {
+        ...testParticleVector,
+        origin: trajectoryParticle.position,
+        direction,
+        magnitude: forceMag,
+      },
+      ...sourceVectors,
+    ]
+  }, [isPointCharges, state.fieldVectors, trajectoryParticle])
 
   const objects = useMemo<SceneObject[]>(
     () =>
@@ -206,8 +247,10 @@ export function FieldsScene({
       )}
       {!isPointCharges && sourceLabel !== "bar magnet (dipole)" && magnetRaw && <BarMagnetBody object={magnetRaw} />}
 
-      {/* source_type=0 (point charges, default): unchanged single-field-vector-arrow treatment. */}
-      {isPointCharges && state.fieldVectors && <FieldVectorRenderer vectors={state.fieldVectors} color={PALETTE.silver} />}
+      {/* source_type=0 (point charges, default): the test-particle vector (index 0) now tracks
+          the animated particle's current position/force every frame (see liveFieldVectors
+          above); the source-charge vectors (index 1+) are unchanged/static. */}
+      {isPointCharges && liveFieldVectors && <FieldVectorRenderer vectors={liveFieldVectors} color={PALETTE.silver} />}
 
       {/* source_type=1 (solenoid): a bundle of parallel lines through the coil axis, standing in
           for the uniform interior B field, real length driven by the actual B magnitude. */}
