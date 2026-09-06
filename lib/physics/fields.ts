@@ -237,10 +237,13 @@ function integrateTrajectory(sourceType: SourceType, params: ScenarioParams, tEn
 
   const MAX_STEPS = 20000
   let steps = Math.max(1, Math.ceil(tEnd / dt))
-  if (steps > MAX_STEPS) {
-    steps = MAX_STEPS
-    dt = tEnd / steps
-  }
+  if (steps > MAX_STEPS) steps = MAX_STEPS
+  // Clamp the actual per-step dt to tEnd/steps so the loop always integrates exactly `tEnd` of
+  // total time, never more. Without this, when the cyclotron-period-derived dt exceeds tEnd,
+  // `steps` floors to 1 above but dt itself was left at its oversized value — so a single RK4
+  // step would integrate using that oversized dt instead of the requested duration, freezing the
+  // trajectory at one fixed point (solenoid) or blowing up near a field singularity (bar_magnet).
+  dt = tEnd / steps
 
   const accelAt = (pos: THREE.Vector3, vel: THREE.Vector3) => {
     const { E, B } = fieldAtPosition(sourceType, params, pos)
