@@ -4,6 +4,7 @@ import { Suspense, type MutableRefObject } from "react"
 import { Environment, ContactShadows } from "@react-three/drei"
 import { CameraRig, type CameraView } from "@/components/CameraRig"
 import { SplatBackdrop } from "@/components/SplatBackdrop"
+import { SimpleHallway } from "@/components/SimpleHallway"
 import { LightScene } from "@/components/modules/LightScene"
 import { FieldsScene } from "@/components/modules/FieldsScene"
 import { ProjectilesScene } from "@/components/modules/ProjectilesScene"
@@ -70,6 +71,15 @@ export function Scene({
           external marble.worldlabs.ai link, completely disconnected from
           the app. */}
       <SplatBackdrop />
+
+      {/* Simple, reliable primitive-based museum lobby — renders in place
+          of the gap the now-disabled splat left behind at the hub/home
+          view (no room picked yet, `showRoomContent` false). Plain
+          boxes/materials only, no Spark/SplatMesh, per Tri's "no more
+          hallway when I'm at home page [being a black void]" feedback —
+          see SimpleHallway.tsx. Once a module is picked `showRoomContent`
+          flips permanently true and this stops rendering, same as before. */}
+      {!showRoomContent && <SimpleHallway />}
 
       <CameraRig view={cameraView} />
 
