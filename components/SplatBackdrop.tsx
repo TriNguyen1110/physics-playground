@@ -115,13 +115,17 @@ export function SplatBackdrop() {
   const meshArgs = useMemo(() => [{ url: SPLAT_URL }] as const, [])
   // On by default (hub-splat-scale-01): now that the hub camera preset sits
   // close enough (see CameraRig.tsx) for the splat's native scan to read as
-  // an actual enclosing room rather than a distant blob, this is the room
-  // the user starts in on load/Home, not an easter egg behind a query param
-  // anymore. `?splat=0` remains as an escape hatch if it needs to be turned
-  // off quickly (e.g. for a clean non-splat comparison shot).
+  // Defaulted back OFF: after many rounds (glitchy -> tiny -> disconnected ->
+  // blurry at close range) this never reached a state that reads as clean
+  // in every room, and the hallway/walkable-room concept it was meant to
+  // support has been cut (see BOARD.tsv H+8.3/H+9.1 — tabs are the
+  // permanent navigation method now, splat is optional decoration, not
+  // core). Defaulting it off stops the single largest recurring visual-bug
+  // source instead of continuing to chase it. `?splat=1` remains as an
+  // opt-in if someone wants to look at it again later.
   const [enabled] = useState(() => {
-    if (typeof window === "undefined") return true
-    return new URLSearchParams(window.location.search).get("splat") !== "0"
+    if (typeof window === "undefined") return false
+    return new URLSearchParams(window.location.search).get("splat") === "1"
   })
 
   if (!enabled) return null
