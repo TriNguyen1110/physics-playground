@@ -30,6 +30,7 @@ export function Scene({
   module,
   cameraView,
   showRoomContent,
+  onSelectModule,
   paramsRef,
   onReadouts,
 }: {
@@ -45,6 +46,9 @@ export function Scene({
   // plumbing — without this, Light's rays/objects would render underneath
   // the hub camera before the user ever chose a room.
   showRoomContent: boolean
+  // Lets SimpleHallway's clickable pedestal markers select a room directly,
+  // same function the top-right tabs call.
+  onSelectModule: (m: ModuleId) => void
   paramsRef: MutableRefObject<ScenarioParams>
   onReadouts: (r: ScenarioState["readouts"]) => void
 }) {
@@ -79,7 +83,7 @@ export function Scene({
           hallway when I'm at home page [being a black void]" feedback —
           see SimpleHallway.tsx. Once a module is picked `showRoomContent`
           flips permanently true and this stops rendering, same as before. */}
-      {!showRoomContent && <SimpleHallway />}
+      {!showRoomContent && <SimpleHallway onSelectModule={onSelectModule} />}
 
       <CameraRig view={cameraView} />
 

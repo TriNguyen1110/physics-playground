@@ -66,6 +66,7 @@ export default function Home() {
           module={module}
           cameraView={cameraView}
           showRoomContent={hasEnteredRoom}
+          onSelectModule={selectModule}
           paramsRef={activeParamsRef}
           onReadouts={onReadouts}
         />

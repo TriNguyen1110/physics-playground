@@ -1,6 +1,6 @@
 "use client"
 
-import { useMemo, useRef } from "react"
+import { useMemo, useRef, useState } from "react"
 import { useFrame } from "@react-three/fiber"
 import type * as THREE from "three"
 import { PALETTE } from "@/components/palette"
@@ -36,26 +36,76 @@ const RIGHT_X = ROOM_CENTER_X + 9
 // so a pedestal's left-to-right position roughly maps to its tab position.
 const MODULE_ORDER: ModuleId[] = ["light", "projectiles", "fields"]
 
-function Pedestal({ x, accent }: { x: number; accent: string }) {
+function Pedestal({
+  x,
+  accent,
+  onSelect,
+}: {
+  x: number
+  accent: string
+  // Clicking the floating marker (or its base) jumps straight into that
+  // module — the same `selectModule` the top-right tabs call, threaded down
+  // through Scene.tsx. Hover state just brightens the marker/light as a
+  // discoverability cue; it's real R3F pointer events (raycast-backed), not
+  // a decorative-only handler.
+  onSelect: () => void
+}) {
+  const [hovered, setHovered] = useState(false)
   return (
     <group position={[x, FLOOR_Y, BACK_Z + 2.4]}>
-      {/* Stone-toned base */}
-      <mesh position={[0, 0.5, 0]} castShadow receiveShadow>
+      {/* Stone-toned base — also clickable, same target as the marker, so
+          the whole pedestal reads as one interactive object. */}
+      <mesh
+        position={[0, 0.5, 0]}
+        castShadow
+        receiveShadow
+        onClick={(e) => {
+          e.stopPropagation()
+          onSelect()
+        }}
+        onPointerOver={(e) => {
+          e.stopPropagation()
+          setHovered(true)
+        }}
+        onPointerOut={() => setHovered(false)}
+      >
         <boxGeometry args={[1.2, 1, 1.2]} />
         <meshStandardMaterial color={PALETTE.silver} metalness={0.35} roughness={0.7} />
       </mesh>
       {/* Glowing accent marker floating above the base — the module's own
-          identity color, the "this leads to that room" nod. */}
-      <mesh position={[0, 1.45, 0]}>
+          identity color, the "this leads to that room" nod. Brightens on
+          hover so it's obvious this is the clickable thing, not just decor. */}
+      <mesh
+        position={[0, 1.45, 0]}
+        onClick={(e) => {
+          e.stopPropagation()
+          onSelect()
+        }}
+        onPointerOver={(e) => {
+          e.stopPropagation()
+          setHovered(true)
+          document.body.style.cursor = "pointer"
+        }}
+        onPointerOut={() => {
+          setHovered(false)
+          document.body.style.cursor = "auto"
+        }}
+      >
         <octahedronGeometry args={[0.32, 0]} />
         <meshStandardMaterial
           color={accent}
           emissive={accent}
-          emissiveIntensity={2.2}
+          emissiveIntensity={hovered ? 3.6 : 2.2}
           toneMapped={false}
         />
       </mesh>
-      <pointLight position={[0, 1.7, 0]} color={accent} intensity={2.2} distance={7} decay={2} />
+      <pointLight
+        position={[0, 1.7, 0]}
+        color={accent}
+        intensity={hovered ? 3.4 : 2.2}
+        distance={hovered ? 9 : 7}
+        decay={2}
+      />
     </group>
   )
 }
@@ -235,7 +285,7 @@ function LightMotes() {
   )
 }
 
-export function SimpleHallway() {
+export function SimpleHallway({ onSelectModule }: { onSelectModule: (m: ModuleId) => void }) {
   const pedestalX = useMemo(() => {
     const spacing = 5.5
     const startX = ROOM_CENTER_X - spacing
@@ -289,7 +339,7 @@ export function SimpleHallway() {
       {MODULE_ORDER.map((m, i) => (
         <group key={m}>
           <Archway x={pedestalX[i]} accent={MODULE_META[m].accent} />
-          <Pedestal x={pedestalX[i]} accent={MODULE_META[m].accent} />
+          <Pedestal x={pedestalX[i]} accent={MODULE_META[m].accent} onSelect={() => onSelectModule(m)} />
         </group>
       ))}
     </group>
